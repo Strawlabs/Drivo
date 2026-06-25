@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+/*
+  Geist font by Vercel — technical precision + great legibility at small sizes.
+  The design spec calls for this font across the entire app.
+  We use the variable font (one file covers all weights 100–900).
+*/
+@font-face {
+  font-family: 'Geist';
+  src: url('/fonts/Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;   /* show system font while Geist loads, then swap */
+}
+
+/*
+  DRIVO DESIGN TOKENS — sourced from DESIGN.md
+  ─────────────────────────────────────────────
+  Color system follows Material Design 3 roles.
+  Light theme: white canvas, deep forest green primary, deep blue-black text.
+
+  HOW TO READ THE COLORS:
+  · primary       = the main action color (buttons, links)
+  · on-[X]        = text/icon color that sits ON top of [X]
+  · [X]-container = a softer tonal version of [X] (chips, tags, highlights)
+  · surface       = background layers (page, cards, inputs)
+  · outline       = borders and dividers
+*/
+
+@theme {
+  /* ── Primary: Deep Forest Green ─────────────────────────── */
+  --color-primary:                #006d37;   /* main CTA buttons, key actions    */
+  --color-on-primary:             #ffffff;   /* white text on green buttons      */
+  --color-primary-container:      #2ecc71;   /* Electric Green — EV indicators   */
+  --color-on-primary-container:   #005027;
+  --color-inverse-primary:        #4ae183;
+  --color-primary-fixed:          #6bfe9c;
+  --color-primary-fixed-dim:      #4ae183;
+  --color-on-primary-fixed:       #00210c;
+  --color-on-primary-fixed-variant: #005228;
+  --color-surface-tint:           #006d37;
+
+  /* ── Secondary: Blue-Grey ───────────────────────────────── */
+  --color-secondary:              #4f6073;
+  --color-on-secondary:           #ffffff;
+  --color-secondary-container:    #d2e4fb;
+  --color-on-secondary-container: #556679;
+  --color-secondary-fixed:        #d2e4fb;
+  --color-secondary-fixed-dim:    #b7c8de;
+  --color-on-secondary-fixed:     #0b1d2d;
+  --color-on-secondary-fixed-variant: #38485a;
+
+  /* ── Tertiary: Neutral Grey ─────────────────────────────── */
+  --color-tertiary:               #5c5f60;
+  --color-on-tertiary:            #ffffff;
+  --color-tertiary-container:     #b1b3b4;
+  --color-on-tertiary-container:  #434546;
+
+  /* ── Error / Destructive ────────────────────────────────── */
+  --color-error:                  #ba1a1a;
+  --color-on-error:               #ffffff;
+  --color-error-container:        #ffdad6;
+  --color-on-error-container:     #93000a;
+
+  /* ── Surfaces (light theme — white canvas) ──────────────── */
+  --color-background:             #f8f9ff;   /* page background             */
+  --color-on-background:          #0b1c30;   /* text on page (Deep Blue)    */
+  --color-surface:                #f8f9ff;
+  --color-surface-dim:            #cbdbf5;
+  --color-surface-bright:         #f8f9ff;
+  --color-on-surface:             #0b1c30;   /* Deep Blue — anchor text     */
+  --color-on-surface-variant:     #3d4a3e;
+  --color-inverse-surface:        #213145;
+  --color-inverse-on-surface:     #eaf1ff;
+  --color-surface-variant:        #d3e4fe;
+
+  /* Surface containers (for layering depth) */
+  --color-surface-container-lowest:  #ffffff;   /* pure white — cards         */
+  --color-surface-container-low:     #eff4ff;   /* slight tint                */
+  --color-surface-container:         #e5eeff;   /* inputs, chips bg           */
+  --color-surface-container-high:    #dce9ff;
+  --color-surface-container-highest: #d3e4fe;
+
+  /* ── Outlines / Borders ─────────────────────────────────── */
+  --color-outline:                #6c7b6d;   /* visible borders             */
+  --color-outline-variant:        #bbcbbb;   /* subtle borders              */
+
+  /* ── ShadCN component aliases ───────────────────────────── */
+  --color-card:                   #ffffff;
+  --color-card-foreground:        #0b1c30;
+  --color-popover:                #ffffff;
+  --color-popover-foreground:     #0b1c30;
+  --color-muted:                  #eff4ff;
+  --color-muted-foreground:       #6c7b6d;
+  --color-accent:                 #e5eeff;
+  --color-accent-foreground:      #0b1c30;
+  --color-destructive:            #ba1a1a;
+  --color-destructive-foreground: #ffffff;
+  --color-border:                 #e5eeff;   /* default border              */
+  --color-border-strong:          #bbcbbb;   /* focused/visible border      */
+  --color-input:                  #f8f9fa;   /* input ghost fill            */
+  --color-ring:                   #006d37;   /* focus ring                  */
+  --color-foreground:             #0b1c30;
+
+  /* ── Deep Blue alias (used for heavy text / nav icons) ──── */
+  --color-deep-blue:              #0b1c30;
+
+  /* ── Electric Green alias (EV indicators, success) ──────── */
+  --color-ev-green:               #2ecc71;
+
+  /* ── Typography ─────────────────────────────────────────── */
+  --font-sans: 'Geist', 'Geist Fallback', system-ui, -apple-system, sans-serif;
+
+  /*
+    Type scale — matches DESIGN.md exactly.
+    "display" = hero/splash, "headline" = section headings,
+    "body" = reading text, "label" = buttons, captions, tags.
+  */
+  --text-display:      2.5rem;     /* 40px — splash screen hero       */
+  --text-headline-lg:  2rem;       /* 32px — desktop section headings */
+  --text-headline-md:  1.5rem;     /* 24px — mobile headings & cards  */
+  --text-body-lg:      1.125rem;   /* 18px — large body copy          */
+  --text-body-md:      1rem;       /* 16px — default body             */
+  --text-label-md:     0.875rem;   /* 14px — buttons, form labels     */
+  --text-label-sm:     0.75rem;    /* 12px — chips, meta text         */
+
+  /* ── Spacing (strict 8px grid) ──────────────────────────── */
+  /*
+    NOTE: we use --space-* (not --spacing-*) to avoid overriding
+    Tailwind v4's built-in size utilities (max-w-sm, w-sm, etc.)
+    which are generated from the --spacing-* namespace.
+  */
+  --spacing:           0.5rem;     /* Tailwind v4 base unit = 8px     */
+  --space-xs:          0.25rem;    /* 4px                             */
+  --space-sm:          0.75rem;    /* 12px                            */
+  --space-md:          1rem;       /* 16px                            */
+  --space-lg:          1.5rem;     /* 24px                            */
+  --space-xl:          2rem;       /* 32px                            */
+  --space-margin:      1.25rem;    /* 20px — container side margins   */
+
+  /* ── Border Radius ("The Comfort Radius") ───────────────── */
+  --radius-sm:    0.25rem;    /* 4px  — status badges, tiny chips   */
+  --radius:       0.5rem;     /* 8px  — small components            */
+  --radius-md:    0.75rem;    /* 12px — medium components           */
+  --radius-lg:    1rem;       /* 16px — cards, input fields         */
+  --radius-xl:    1.5rem;     /* 24px — bottom sheets, drawers      */
+  --radius-full:  9999px;     /* pill — status chips                */
+
+  /* ── Elevation shadows ───────────────────────────────────── */
+  --shadow-card:   0px 4px 20px rgba(26, 43, 60, 0.05);    /* Level 1: cards   */
+  --shadow-float:  0px 10px 30px rgba(26, 43, 60, 0.12);   /* Level 2: floating */
+  --shadow-modal:  0px 20px 60px rgba(26, 43, 60, 0.2);    /* modal / drawers  */
+}
+
+/* ── Base reset ──────────────────────────────────────────────── */
+/*
+  Everything here is in @layer base so Tailwind utility classes
+  (text-white, text-primary, etc.) can override these defaults.
+  Unlayered CSS beats @layer utilities — that's why this matters.
+*/
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    background-color: var(--color-background);
+    color: var(--color-on-surface);
+    -webkit-text-size-adjust: 100%;
+    font-size: 16px;
+  }
+
+  body {
+    min-height: 100dvh;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #root {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+}
