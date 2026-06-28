@@ -450,25 +450,26 @@ export default function DriverHomePage() {
   const [activeNav, setActiveNav]   = useState('home')
   const [vehicle, setVehicle]       = useState(null)
 
-  const firstName  = user?.email?.split('@')[0] ?? 'Driver'
-  const displayName = firstName.charAt(0).toUpperCase() + firstName.slice(1)
+  const [displayName, setDisplayName] = useState('Driver')
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening'
 
   useEffect(() => {
     if (!user) return
     async function load() {
-      const [vRes, dRes] = await Promise.all([
+      const [vRes, dRes, uRes] = await Promise.all([
         supabase.from('vehicles').select('*').eq('driver_id', user.id).maybeSingle(),
-        supabase.from('drivers').select('is_online, status').eq('id', user.id).maybeSingle(),
+        supabase.from('driver_profiles').select('id, is_online, status').eq('user_id', user.id).maybeSingle(),
+        supabase.from('users').select('name').eq('id', user.id).single(),
       ])
       if (vRes.data) setVehicle(vRes.data)
       if (dRes.data) {
         setIsOnline(dRes.data.is_online ?? false)
-        if (dRes.data.status === 'pending') {
+        if (dRes.data.kyc_status !== 'approved') {
           navigate('/driver/verification', { replace: true })
         }
       }
+      if (uRes.data?.name) setDisplayName(uRes.data.name.split(' ')[0])
     }
     load()
   }, [user])
@@ -477,7 +478,7 @@ export default function DriverHomePage() {
     setToggling(true)
     const next = !isOnline
     if (user) {
-      const { error } = await supabase.from('drivers').update({ is_online: next }).eq('id', user.id)
+      const { error } = await supabase.from('driver_profiles').update({ is_online: next }).eq('user_id', user.id)
       if (!error) setIsOnline(next)
     } else {
       setIsOnline(next)

@@ -41,10 +41,11 @@ const DOCS = [
 
 function UploadSheet({ doc, onClose, onSave }) {
   const [fileName, setFileName] = useState(null)
+  const [file, setFile] = useState(null)
 
   function handleFileChange(e) {
-    const file = e.target.files?.[0]
-    if (file) setFileName(file.name)
+    const f = e.target.files?.[0]
+    if (f) { setFileName(f.name); setFile(f) }
   }
 
   return (
@@ -84,7 +85,7 @@ function UploadSheet({ doc, onClose, onSave }) {
           <button onClick={onClose} style={{ height: 52, borderRadius: 12, border: '1px solid var(--color-outline)', background: 'none', fontSize: 15, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
             Cancel
           </button>
-          <button onClick={() => { onSave(doc.id); onClose() }} style={{ height: 52, borderRadius: 12, border: 'none', background: 'var(--color-primary)', color: 'white', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+          <button onClick={() => { if (file) onSave(doc.id, file); onClose() }} disabled={!file} style={{ height: 52, borderRadius: 12, border: 'none', background: file ? 'var(--color-primary)' : 'var(--color-outline-variant)', color: 'white', fontSize: 15, fontWeight: 600, cursor: file ? 'pointer' : 'not-allowed' }}>
             Save
           </button>
         </div>
@@ -155,14 +156,46 @@ export default function DriverVerificationPage() {
 
   const allUploaded = DOCS.every(d => uploaded[d.id])
 
+  function handleSaveDoc(id, file) {
+    setUploaded(prev => ({ ...prev, [id]: file }))
+  }
+
   async function handleSubmit() {
-    if (submitting) return
+    if (submitting || !user) return
     setSubmitting(true)
-    // In a real app: upload files to Supabase Storage and update driver record
-    // For now, just simulate a delay
-    await new Promise(r => setTimeout(r, 1200))
-    setSubmitting(false)
-    setSubmitted(true)
+
+    try {
+      // 1. Upload each file to Supabase Storage
+      for (const doc of DOCS) {
+        const file = uploaded[doc.id]
+        if (!file) continue
+        const ext = file.name.split('.').pop()
+        const path = `${user.id}/${doc.id}.${ext}`
+        const { error } = await supabase.storage.from('kyc-documents').upload(path, file, { upsert: true })
+        if (error) throw error
+      }
+
+      // 2. Get driver profile id
+      const { data: profile } = await supabase
+        .from('driver_profiles')
+        .select('id')
+        .eq('user_id', user.id)
+        .single()
+
+      // 3. Update KYC status to submitted
+      if (profile) {
+        await supabase
+          .from('driver_profiles')
+          .update({ kyc_status: 'submitted' })
+          .eq('id', profile.id)
+      }
+
+      setSubmitted(true)
+    } catch (err) {
+      alert('Upload failed: ' + err.message)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   if (submitted) {
@@ -189,7 +222,7 @@ export default function DriverVerificationPage() {
         <UploadSheet
           doc={DOCS.find(d => d.id === openDoc)}
           onClose={() => setOpenDoc(null)}
-          onSave={id => setUploaded(prev => ({ ...prev, [id]: true }))}
+          onSave={handleSaveDoc}
         />
       )}
 
@@ -201,8 +234,14 @@ export default function DriverVerificationPage() {
           </button>
           <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)' }}>Drivo</h1>
         </div>
-        <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 14, border: '2px solid var(--color-primary-container)' }}>
-          {user?.email?.[0]?.toUpperCase() ?? 'D'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button onClick={async () => { await supabase.auth.signOut(); navigate('/login') }}
+            style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-error)', background: 'none', border: '1px solid var(--color-error)', borderRadius: 9999, padding: '5px 14px', cursor: 'pointer' }}>
+            Sign Out
+          </button>
+          <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 14, border: '2px solid var(--color-primary-container)' }}>
+            {user?.email?.[0]?.toUpperCase() ?? 'D'}
+          </div>
         </div>
       </header>
 
