@@ -459,7 +459,7 @@ export default function DriverHomePage() {
     async function load() {
       const [vRes, dRes, uRes] = await Promise.all([
         supabase.from('vehicles').select('*').eq('driver_id', user.id).maybeSingle(),
-        supabase.from('driver_profiles').select('id, is_online, status').eq('user_id', user.id).maybeSingle(),
+        supabase.from('driver_profiles').select('id, is_online, status, kyc_status').eq('user_id', user.id).maybeSingle(),
         supabase.from('users').select('name').eq('id', user.id).single(),
       ])
       if (vRes.data) setVehicle(vRes.data)
