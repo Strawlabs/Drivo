@@ -125,7 +125,7 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
           <button style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer' }}>View All</button>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          {[{ label: 'EV Auto', icon: '🛺' }, { label: 'EV Car', icon: '🚗' }].map(({ label, icon }) => (
+          {[{ label: 'EV Auto', icon: 'electric_rickshaw' }, { label: 'EV Car', icon: 'electric_car' }].map(({ label, icon }) => (
             <button
               key={label}
               className="flex flex-col items-center justify-center"
@@ -133,8 +133,8 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
               onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--color-primary)'; e.currentTarget.style.background = 'rgba(46,204,113,0.05)' }}
               onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(187,203,187,0.3)'; e.currentTarget.style.background = 'var(--color-surface)' }}
             >
-              <div style={{ width: 64, height: 64, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-surface-container-highest)', borderRadius: '50%', fontSize: 28 }}>
-                {icon}
+              <div style={{ width: 64, height: 64, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-surface-container-highest)', borderRadius: '50%' }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 32, color: 'var(--color-primary)' }}>{icon}</span>
               </div>
               <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-on-surface)' }}>{label}</span>
             </button>
@@ -171,7 +171,7 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
               </div>
               <div className="flex justify-between items-center" style={{ background: 'var(--color-surface-container-low)', padding: '8px 12px', borderRadius: 12 }}>
                 <div className="flex items-center gap-1.5">
-                  <span style={{ fontSize: 13 }}>🔋</span>
+                  <span className="material-symbols-outlined" style={{ fontSize: 18, color: 'var(--color-primary)' }}>battery_charging_full</span>
                   <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.battery}%</span>
                 </div>
                 <button
@@ -215,8 +215,8 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
               You saved 12kg of CO₂ this week! Keep it up for premium rewards.
             </p>
           </div>
-          <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--color-primary-container)', fontSize: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            🌿
+          <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--color-primary-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <span className="material-symbols-outlined" style={{ fontSize: 32, color: 'var(--color-on-primary-container)' }}>eco</span>
           </div>
         </div>
       </section>
@@ -352,121 +352,135 @@ function TripsTab() {
   )
 }
 
-// ── TAB: Drivers ────────────────────────────────────────────────
+// ── TAB: Drivers (Discovery) ─────────────────────────────────────
+const DISCOVERY_DRIVERS = [
+  { id: 1, name: 'Ramesh K.',    rating: 4.9, vehicle: 'Tesla Model S',  status: 'available',  eta: null,  avatar: 'RK', preferred: true,  trips: 1240 },
+  { id: 2, name: 'Priya S.',     rating: 4.8, vehicle: 'Lucid Air Pure', status: 'available',  eta: '5m',  avatar: 'PS', preferred: false, trips: 870  },
+  { id: 3, name: 'Anita M.',     rating: 5.0, vehicle: 'Rivian R1S',     status: 'on_ride',    eta: null,  avatar: 'AM', preferred: true,  trips: 2100 },
+  { id: 4, name: 'Venkatesh R.', rating: 4.7, vehicle: 'BYD Atto 3',     status: 'available',  eta: '8m',  avatar: 'VR', preferred: false, trips: 560  },
+]
+
+const FILTERS = ['EV Auto', 'EV Car', 'Distance']
+
 function DriversTab() {
-  const [selected, setSelected] = useState(null)
-
-  if (selected) {
-    const d = selected
-    return (
-      <div className="pb-8">
-        {/* Hero */}
-        <div style={{ position: 'relative', height: 200, background: 'linear-gradient(135deg, #0f2017, #1a3a1a)', display: 'flex', alignItems: 'flex-end', padding: 20 }}>
-          <button onClick={() => setSelected(null)} style={{ position: 'absolute', top: 16, left: 16, background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%', width: 36, height: 36, cursor: 'pointer', color: 'white', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            ←
-          </button>
-          <div className="flex items-end gap-4">
-            <Avatar initials={d.avatar} size={72} />
-            <div>
-              <h2 style={{ fontSize: 22, fontWeight: 700, color: 'white' }}>{d.name}</h2>
-              <div className="flex items-center gap-2 mt-1">
-                <StarIcon />
-                <span style={{ fontSize: 14, fontWeight: 600, color: '#F59E0B' }}>{d.rating}</span>
-                <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>· {d.trips.toLocaleString()} Trips</span>
-              </div>
-            </div>
-          </div>
-          {d.tags.includes('Premium Tier') && (
-            <span style={{ position: 'absolute', top: 16, right: 16, background: 'var(--color-primary)', color: 'white', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', padding: '3px 10px', borderRadius: 9999 }}>PREMIUM TIER</span>
-          )}
-        </div>
-
-        <div className="px-5 pt-5">
-          {/* Vehicle */}
-          <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginBottom: 16 }}>
-            <div className="flex justify-between items-center mb-2">
-              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-secondary)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Current Vehicle</span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary)' }}>🔋 {d.battery}% Charged</span>
-            </div>
-            <p style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-on-surface)' }}>{d.type}</p>
-          </div>
-
-          {/* Stats */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-            {[{ label: 'Safety Rating', value: d.safety }, { label: 'Exp. Partner', value: '2y' }].map(({ label, value }) => (
-              <div key={label} style={{ background: 'white', borderRadius: 16, padding: 16, textAlign: 'center', boxShadow: '0 1px 6px rgba(26,43,60,0.06)' }}>
-                <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--color-on-surface)' }}>{value}</p>
-                <p style={{ fontSize: 12, color: 'var(--color-secondary)', marginTop: 4 }}>{label}</p>
-              </div>
-            ))}
-          </div>
-
-          {/* Languages */}
-          <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginBottom: 16 }}>
-            <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 10 }}>🌐 Languages</p>
-            <div className="flex gap-2 flex-wrap">
-              {d.languages.map(lang => (
-                <span key={lang} style={{ fontSize: 13, padding: '4px 12px', borderRadius: 9999, background: 'var(--color-surface-container-low)', color: 'var(--color-on-surface)' }}>{lang}</span>
-              ))}
-            </div>
-          </div>
-
-          {/* Trust */}
-          <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginBottom: 24 }}>
-            <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 10 }}>🛡️ Trust & Safety</p>
-            {d.tags.map(tag => (
-              <div key={tag} className="flex items-center gap-2" style={{ marginBottom: 8 }}>
-                <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </div>
-                <span style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{tag}</span>
-              </div>
-            ))}
-          </div>
-
-          <button style={{ width: '100%', height: 52, background: 'var(--color-primary)', color: 'white', borderRadius: 9999, border: 'none', fontSize: 15, fontWeight: 700, cursor: 'pointer' }}>
-            ⚡ Request Ride Now
-          </button>
-        </div>
-      </div>
-    )
-  }
+  const [view, setView] = useState('list')
+  const [activeFilter, setActiveFilter] = useState('EV Auto')
 
   return (
-    <div className="px-5 pt-6 pb-8">
-      <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 4 }}>Nearby Drivers</h2>
-      <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginBottom: 24 }}>Tap a driver to view their profile</p>
+    <div style={{ paddingBottom: 120 }}>
+      {/* Header */}
+      <div className="px-5 pt-6 pb-4">
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-on-surface)', margin: 0 }}>Discovery</h2>
+            <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginTop: 3 }}>Find premium EV certified drivers near you</p>
+          </div>
+          {/* List / Map toggle */}
+          <div style={{ display: 'flex', background: 'var(--color-surface-container)', borderRadius: 9999, padding: 3, gap: 2 }}>
+            {['List', 'Map'].map(v => (
+              <button key={v} onClick={() => setView(v.toLowerCase())}
+                style={{ padding: '5px 14px', borderRadius: 9999, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer', background: view === v.toLowerCase() ? 'var(--color-primary)' : 'transparent', color: view === v.toLowerCase() ? 'white' : 'var(--color-secondary)', transition: 'all 0.15s' }}>
+                {v}
+              </button>
+            ))}
+          </div>
+        </div>
 
-      <div className="flex flex-col gap-3">
-        {NEARBY_DRIVERS.map(driver => (
-          <button
-            key={driver.id}
-            onClick={() => setSelected(driver)}
-            className="text-left"
-            style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)', cursor: 'pointer', transition: 'box-shadow 0.15s' }}
-            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 16px rgba(26,43,60,0.12)'}
-            onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 6px rgba(26,43,60,0.07)'}
-          >
-            <div className="flex items-center gap-4">
-              <Avatar initials={driver.avatar} size={52} />
-              <div style={{ flex: 1 }}>
-                <div className="flex justify-between items-start">
-                  <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.name}</p>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary)' }}>{driver.eta} away</span>
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <StarIcon />
-                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
-                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.type}</span>
-                </div>
-                <div className="flex items-center gap-3 mt-2">
-                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>🔋 {driver.battery}%</span>
-                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.trips.toLocaleString()} trips</span>
+        {/* Filter chips */}
+        <div className="flex gap-2 mt-4 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+          {FILTERS.map(f => (
+            <button key={f} onClick={() => setActiveFilter(f)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 9999, border: `1px solid ${activeFilter === f ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: activeFilter === f ? 'rgba(0,109,55,0.08)' : 'white', color: activeFilter === f ? 'var(--color-primary)' : 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0, transition: 'all 0.15s' }}>
+              {f === 'EV Auto' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 17H3a1 1 0 01-1-1v-4l2.5-5h11L18 12v4a1 1 0 01-1 1h-2"/><circle cx="7.5" cy="17.5" r="1.5"/><circle cx="14.5" cy="17.5" r="1.5"/></svg>}
+              {f === 'EV Car' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="8" width="20" height="10" rx="2"/><path d="M6 8V6a2 2 0 012-2h8a2 2 0 012 2v2"/><circle cx="7" cy="18" r="1"/><circle cx="17" cy="18" r="1"/></svg>}
+              {f === 'Distance' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>}
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Driver cards */}
+      <div className="px-5 flex flex-col gap-3">
+        {DISCOVERY_DRIVERS.map(driver => {
+          const isOnRide = driver.status === 'on_ride'
+          const statusLabel = isOnRide ? 'Currently on ride' : driver.eta ? `Available in ${driver.eta}` : 'Available Now'
+          const statusColor = isOnRide ? 'var(--color-secondary)' : 'var(--color-primary)'
+
+          return (
+            <div key={driver.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)' }}>
+              <div className="flex items-start gap-3 mb-3">
+                <Avatar initials={driver.avatar} size={56} />
+                <div style={{ flex: 1 }}>
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-on-surface)' }}>{driver.name}</p>
+                        {driver.preferred && (
+                          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--color-primary)', background: 'rgba(0,109,55,0.1)', padding: '2px 7px', borderRadius: 9999 }}>PREFERRED</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <StarIcon />
+                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
+                        <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.vehicle}</span>
+                      </div>
+                    </div>
+                    <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-secondary)" strokeWidth="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-2">
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor, flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: statusColor }}>{statusLabel}</span>
+                  </div>
                 </div>
               </div>
+
+              <div className="flex gap-2">
+                <button style={{ flex: 1, height: 40, border: '1px solid var(--color-outline-variant)', borderRadius: 10, background: 'none', fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
+                  View Profile
+                </button>
+                <button disabled={isOnRide}
+                  style={{ flex: 1, height: 40, border: 'none', borderRadius: 10, background: isOnRide ? 'var(--color-surface-container)' : 'var(--color-on-surface)', color: isOnRide ? 'var(--color-secondary)' : 'white', fontSize: 13, fontWeight: 600, cursor: isOnRide ? 'default' : 'pointer' }}>
+                  {isOnRide ? 'On Ride' : 'Request Ride'}
+                </button>
+              </div>
             </div>
-          </button>
+          )
+        })}
+      </div>
+
+      {/* Drivo Guarantee */}
+      <div className="px-5 mt-5">
+        <div style={{ background: 'rgba(0,109,55,0.06)', border: '1px solid rgba(0,109,55,0.2)', borderRadius: 16, padding: 16 }}>
+          <div className="flex items-center gap-2 mb-2">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2"><path d="M12 2l7 4v5c0 5-4 9-7 10C9 20 5 16 5 11V6l7-4z"/><path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>DRIVO GUARANTEE</p>
+          </div>
+          <p style={{ fontSize: 13, color: 'var(--color-on-surface)', lineHeight: 1.5 }}>
+            Every driver in the Drivo network is 100% EV certified and undergoes rigorous hospitality training for a premium experience.
+          </p>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="px-5 mt-4 grid grid-cols-2 gap-3">
+        {[{ label: 'kg CO2 Saved Today', value: '1.2k' }, { label: 'Active EV', value: '142' }].map(({ label, value }) => (
+          <div key={label} style={{ background: 'var(--color-primary)', borderRadius: 14, padding: 16 }}>
+            <p style={{ fontSize: 22, fontWeight: 700, color: 'white' }}>{value}</p>
+            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', marginTop: 2 }}>{label}</p>
+          </div>
         ))}
+      </div>
+
+      {/* Explore Map View */}
+      <div className="flex justify-center mt-5">
+        <button onClick={() => setView('map')}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 24px', background: 'var(--color-on-surface)', color: 'white', borderRadius: 9999, border: 'none', fontSize: 14, fontWeight: 600, cursor: 'pointer', boxShadow: '0 4px 16px rgba(26,43,60,0.2)' }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
+          Explore Map View
+        </button>
       </div>
     </div>
   )
@@ -610,10 +624,10 @@ export default function RiderHomePage() {
       {/* Bottom Nav */}
       <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-4 pt-2" style={{ background: 'var(--color-surface)', boxShadow: '0px -4px 20px rgba(26,43,60,0.05)', borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>
         {[
-          { key: 'home',    label: 'Home',    icon: '🏠' },
-          { key: 'trips',   label: 'Trips',   icon: '🧾' },
-          { key: 'drivers', label: 'Drivers', icon: '🚕' },
-          { key: 'profile', label: 'Profile', icon: '👤' },
+          { key: 'home',    label: 'Home',    icon: 'home' },
+          { key: 'trips',   label: 'Trips',   icon: 'receipt_long' },
+          { key: 'drivers', label: 'Drivers', icon: 'local_taxi' },
+          { key: 'profile', label: 'Profile', icon: 'person' },
         ].map(({ key, label, icon }) => (
           <button
             key={key}
@@ -621,7 +635,7 @@ export default function RiderHomePage() {
             className="flex flex-col items-center justify-center"
             style={{ background: activeNav === key ? 'var(--color-primary-container)' : 'transparent', color: activeNav === key ? 'var(--color-on-primary-container)' : 'var(--color-on-secondary-container)', borderRadius: 9999, padding: activeNav === key ? '4px 16px' : '4px 8px', border: 'none', cursor: 'pointer', transition: 'all 0.2s ease', minWidth: 48 }}
           >
-            <span style={{ fontSize: 20 }}>{icon}</span>
+            <span className="material-symbols-outlined" style={{ fontSize: 24, fontVariationSettings: activeNav === key ? "'FILL' 1" : "'FILL' 0" }}>{icon}</span>
             <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', marginTop: 2 }}>{label}</span>
           </button>
         ))}

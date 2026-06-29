@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
@@ -153,6 +153,14 @@ export default function DriverVerificationPage() {
   const [uploaded, setUploaded] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+
+  useEffect(() => {
+    if (!user) return
+    supabase.from('driver_profiles').select('kyc_status').eq('user_id', user.id).single()
+      .then(({ data }) => {
+        if (data?.kyc_status === 'approved') navigate('/driver/home', { replace: true })
+      })
+  }, [user])
 
   const allUploaded = DOCS.every(d => uploaded[d.id])
 
