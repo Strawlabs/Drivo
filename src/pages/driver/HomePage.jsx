@@ -439,6 +439,62 @@ function FamilyTab() {
   )
 }
 
+// ── Incoming Ride Request Modal ─────────────────────────────────
+function RideRequestModal({ ride, onAccept, onReject }) {
+  const [countdown, setCountdown] = useState(30)
+  useEffect(() => {
+    const t = setInterval(() => setCountdown(c => {
+      if (c <= 1) { clearInterval(t); onReject(); return 0 }
+      return c - 1
+    }), 1000)
+    return () => clearInterval(t)
+  }, [])
+
+  return (
+    <>
+      <div style={{ position:'fixed', inset:0, zIndex:200, background:'rgba(11,28,48,0.6)', backdropFilter:'blur(4px)' }} />
+      <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:201, background:'var(--color-surface)', borderTopLeftRadius:24, borderTopRightRadius:24, padding:'20px 20px 40px', boxShadow:'0 -10px 40px rgba(26,43,60,0.2)' }}>
+        <div style={{ width:40, height:4, background:'var(--color-outline-variant)', borderRadius:2, margin:'0 auto 20px' }} />
+        <div className="flex items-center justify-between mb-4">
+          <h3 style={{ fontSize:20, fontWeight:700, color:'var(--color-on-surface)' }}>New Ride Request</h3>
+          <div style={{ width:44, height:44, borderRadius:'50%', border:`3px solid var(--color-primary)`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, fontWeight:700, color:'var(--color-primary)' }}>{countdown}</div>
+        </div>
+        {/* Route */}
+        <div className="flex gap-4 items-start mb-5" style={{ background:'var(--color-surface-container-low)', borderRadius:14, padding:'14px 16px' }}>
+          <div className="flex flex-col items-center gap-1 pt-1">
+            <div style={{ width:10, height:10, borderRadius:'50%', background:'var(--color-primary)', flexShrink:0 }} />
+            <div style={{ width:2, height:24, background:'var(--color-outline-variant)' }} />
+            <div style={{ width:10, height:10, borderRadius:2, background:'#EF4444', flexShrink:0 }} />
+          </div>
+          <div className="flex flex-col gap-3 flex-1">
+            <div>
+              <p style={{ fontSize:11, color:'var(--color-secondary)', fontWeight:600 }}>PICKUP</p>
+              <p style={{ fontSize:15, fontWeight:600, color:'var(--color-on-surface)' }}>{ride.pickup_address}</p>
+            </div>
+            <div>
+              <p style={{ fontSize:11, color:'var(--color-secondary)', fontWeight:600 }}>DESTINATION</p>
+              <p style={{ fontSize:15, fontWeight:600, color:'var(--color-on-surface)' }}>{ride.destination_address}</p>
+            </div>
+          </div>
+          <div style={{ textAlign:'right' }}>
+            <p style={{ fontSize:22, fontWeight:700, color:'var(--color-primary)' }}>₹{ride.estimated_fare}</p>
+            <p style={{ fontSize:11, color:'var(--color-secondary)' }}>Est. Fare</p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onReject} style={{ flex:1, height:52, border:'1px solid var(--color-outline-variant)', background:'none', borderRadius:12, fontSize:15, fontWeight:700, color:'var(--color-on-surface)', cursor:'pointer' }}>
+            Reject
+          </button>
+          <button onClick={onAccept} style={{ flex:2, height:52, background:'var(--color-primary)', color:'white', border:'none', borderRadius:12, fontSize:15, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+            <span className="material-symbols-outlined">check_circle</span>
+            Accept Ride
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── Main Page ───────────────────────────────────────────────────
 export default function DriverHomePage() {
   const { user } = useAuth()
@@ -449,6 +505,9 @@ export default function DriverHomePage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeNav, setActiveNav]   = useState('home')
   const [vehicle, setVehicle]       = useState(null)
+  const [driverProfileId, setDriverProfileId] = useState(null)
+  const [incomingRide, setIncomingRide] = useState(null)
+  const [activeRide, setActiveRide] = useState(null)
 
   const [displayName, setDisplayName] = useState('Driver')
   const hour = new Date().getHours()
@@ -465,6 +524,7 @@ export default function DriverHomePage() {
       if (vRes.data) setVehicle(vRes.data)
       if (dRes.data) {
         setIsOnline(dRes.data.is_online ?? false)
+        setDriverProfileId(dRes.data.id)
         if (dRes.data.kyc_status !== 'approved') {
           navigate('/driver/verification', { replace: true })
         }
@@ -473,6 +533,59 @@ export default function DriverHomePage() {
     }
     load()
   }, [user])
+
+  // Listen for new ride requests assigned to this driver
+  useEffect(() => {
+    if (!driverProfileId || !isOnline) return
+    const channel = supabase
+      .channel('driver-rides-' + driverProfileId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverProfileId}` }, payload => {
+        if (payload.new.status === 'requested') setIncomingRide(payload.new)
+      })
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [driverProfileId, isOnline])
+
+  async function handleAcceptRide() {
+    if (!incomingRide || !driverProfileId) return
+    const { data: existing } = await supabase
+      .from('rides')
+      .select('id')
+      .eq('driver_id', driverProfileId)
+      .in('status', ['accepted', 'active'])
+      .maybeSingle()
+    if (existing) {
+      await supabase.from('rides').update({ status: 'expired' }).eq('id', incomingRide.id)
+      setIncomingRide(null)
+      return
+    }
+    await supabase.from('rides').update({ status: 'accepted' }).eq('id', incomingRide.id)
+    setActiveRide(incomingRide)
+    setIncomingRide(null)
+  }
+
+  async function handleRejectRide() {
+    if (incomingRide) {
+      await supabase.from('rides').update({ status: 'expired' }).eq('id', incomingRide.id)
+    }
+    setIncomingRide(null)
+  }
+
+  async function handleStartRide() {
+    if (!activeRide) return
+    await supabase.from('rides').update({ status: 'active', started_at: new Date().toISOString() }).eq('id', activeRide.id)
+    setActiveRide(r => ({ ...r, status: 'active' }))
+  }
+
+  async function handleCompleteRide() {
+    if (!activeRide) return
+    await supabase.from('rides').update({
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      final_fare: activeRide.estimated_fare,
+    }).eq('id', activeRide.id)
+    setActiveRide(null)
+  }
 
   async function handleToggleOnline() {
     setToggling(true)
@@ -493,6 +606,65 @@ export default function DriverHomePage() {
 
   return (
     <div style={{ minHeight: '100dvh', background: 'var(--color-background)', fontFamily: 'var(--font-sans)', position: 'relative' }}>
+
+      {/* Active ride panel */}
+      {activeRide && (
+        <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:100, background:'var(--color-surface)', borderTopLeftRadius:24, borderTopRightRadius:24, boxShadow:'0 -10px 40px rgba(26,43,60,0.18)', padding:'20px 20px 40px' }}>
+          <div style={{ width:40, height:4, background:'var(--color-outline-variant)', borderRadius:2, margin:'0 auto 20px' }} />
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+            <h3 style={{ fontSize:20, fontWeight:700, color:'var(--color-on-surface)' }}>
+              {activeRide.status === 'active' ? 'Ride in Progress' : 'Ride Accepted'}
+            </h3>
+            <span style={{ background: activeRide.status === 'active' ? 'rgba(0,109,55,0.12)' : 'rgba(245,158,11,0.12)', color: activeRide.status === 'active' ? 'var(--color-primary)' : '#B45309', fontSize:12, fontWeight:700, padding:'4px 12px', borderRadius:9999 }}>
+              {activeRide.status === 'active' ? '● EN ROUTE' : '● ACCEPTED'}
+            </span>
+          </div>
+          {/* Route */}
+          <div style={{ background:'var(--color-surface-container-low)', borderRadius:14, padding:'14px 16px', marginBottom:20 }}>
+            <div style={{ display:'flex', gap:12, alignItems:'flex-start' }}>
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:4, paddingTop:3 }}>
+                <div style={{ width:10, height:10, borderRadius:'50%', background:'var(--color-primary)' }} />
+                <div style={{ width:2, height:24, background:'var(--color-outline-variant)' }} />
+                <div style={{ width:10, height:10, borderRadius:2, background:'#EF4444' }} />
+              </div>
+              <div style={{ flex:1, display:'flex', flexDirection:'column', gap:12 }}>
+                <div>
+                  <p style={{ fontSize:11, color:'var(--color-secondary)', fontWeight:600 }}>PICKUP</p>
+                  <p style={{ fontSize:15, fontWeight:600, color:'var(--color-on-surface)' }}>{activeRide.pickup_address}</p>
+                </div>
+                <div>
+                  <p style={{ fontSize:11, color:'var(--color-secondary)', fontWeight:600 }}>DESTINATION</p>
+                  <p style={{ fontSize:15, fontWeight:600, color:'var(--color-on-surface)' }}>{activeRide.destination_address}</p>
+                </div>
+              </div>
+              <p style={{ fontSize:22, fontWeight:700, color:'var(--color-primary)' }}>₹{activeRide.estimated_fare}</p>
+            </div>
+          </div>
+          {/* Actions */}
+          {activeRide.status !== 'active' ? (
+            <button onClick={handleStartRide}
+              style={{ width:'100%', height:52, background:'var(--color-primary)', color:'white', border:'none', borderRadius:12, fontSize:16, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8, boxShadow:'0 4px 16px rgba(0,109,55,0.25)' }}>
+              <span className="material-symbols-outlined">play_arrow</span>
+              Start Ride
+            </button>
+          ) : (
+            <button onClick={handleCompleteRide}
+              style={{ width:'100%', height:52, background:'var(--color-on-surface)', color:'white', border:'none', borderRadius:12, fontSize:16, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+              <span className="material-symbols-outlined">flag</span>
+              Complete Ride
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Incoming ride request */}
+      {incomingRide && (
+        <RideRequestModal
+          ride={incomingRide}
+          onAccept={handleAcceptRide}
+          onReject={handleRejectRide}
+        />
+      )}
 
       {/* Scrim */}
       {drawerOpen && (

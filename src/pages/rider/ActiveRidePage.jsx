@@ -1,171 +1,353 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/hooks/useAuth.jsx'
+import { fetchAvailableDrivers } from '@/lib/drivers'
 
 export default function ActiveRidePage() {
   const navigate = useNavigate()
   const location = useLocation()
-  const driver = location.state?.driver ?? { name: 'Ramesh K.', rating: 4.9, avatar: 'RK', type: 'EV Sedan', battery: 94 }
-  const initialFare = location.state?.fare ?? 284
+  const { user } = useAuth()
 
-  const [fare, setFare] = useState(initialFare)
-  const [eta, setEta] = useState(8)
-  const [progress, setProgress] = useState(33)
-  const [showSos, setShowSos] = useState(false)
+  const rideId      = location.state?.rideId      ?? null
+  const driver      = location.state?.driver      ?? { name: 'Ramesh K.', rating: 4.9, avatar: 'RK', type: 'EV Sedan' }
+  const pickup      = location.state?.pickup      ?? 'Koramangala 5th Block'
+  const destination = location.state?.destination ?? 'MG Road Metro Station'
+  const initialFare = location.state?.fare        ?? 284
 
-  // Tick fare and ETA forward
+  const [rideStatus, setRideStatus] = useState(location.state?.rideStatus ?? 'requested')
+  const [fare, setFare]         = useState(initialFare)
+  const [eta, setEta]           = useState(8)
+  const [progress, setProgress] = useState(30)
+  const [cancelling, setCancelling] = useState(false)
+  const [alternates, setAlternates] = useState([])
+  const fareRef = useRef(fare)
+  fareRef.current = fare
+
+  // Re-sync local state when navigated to a different ride (e.g. requesting
+  // an alternate driver reuses this same route, so mount-only useState
+  // wouldn't otherwise reset stale status/fare from the previous ride).
+  useEffect(() => {
+    setRideStatus(location.state?.rideStatus ?? 'requested')
+    setFare(location.state?.fare ?? 284)
+    setEta(8)
+    setProgress(30)
+    setAlternates([])
+  }, [rideId])
+
+  // Tick fare & ETA
   useEffect(() => {
     const interval = setInterval(() => {
       setFare(f => parseFloat((f + 0.5).toFixed(2)))
       setEta(e => Math.max(0, e - 1))
-      setProgress(p => Math.min(100, p + 8))
-    }, 4000)
+      setProgress(p => Math.min(100, p + 5))
+    }, 8000)
     return () => clearInterval(interval)
   }, [])
 
-  // Auto-advance to completion when ETA hits 0
+  // Supabase realtime — listen for ride status changes
   useEffect(() => {
-    if (eta === 0) {
-      const t = setTimeout(() => navigate('/rider/ride-complete', { state: { driver, fare } }), 1500)
-      return () => clearTimeout(t)
+    if (!rideId) return
+    const channel = supabase
+      .channel(`ride-${rideId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides', filter: `id=eq.${rideId}` }, payload => {
+        const s = payload.new.status
+        if (s === 'accepted') setRideStatus('accepted')
+        if (s === 'active')   setRideStatus('active')
+        if (s === 'expired') {
+          setRideStatus('expired')
+          fetchAvailableDrivers({ excludeDriverId: driver.id }).then(setAlternates).catch(() => setAlternates([]))
+        }
+        if (s === 'completed') {
+          navigate('/rider/ride-complete', { state: { rideId, driver, fare: fareRef.current, pickup, destination }, replace: true })
+        }
+        if (s === 'cancelled') {
+          navigate('/rider/home', { replace: true })
+        }
+      })
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [rideId])
+
+  async function handleCancel() {
+    if (cancelling) return
+    setCancelling(true)
+    if (rideId) {
+      await supabase.from('rides').update({
+        status: 'cancelled',
+        cancellation_reason: 'Cancelled by rider',
+        cancelled_by: user?.id ?? null,
+      }).eq('id', rideId)
     }
-  }, [eta])
+    navigate('/rider/home', { replace: true })
+  }
 
-  return (
-    <div style={{ minHeight: '100dvh', background: 'var(--color-background)', fontFamily: 'var(--font-sans)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+  async function handleRequestAlternate(altDriver) {
+    if (!user) return
+    try {
+      const { data, error } = await supabase.from('rides').insert({
+        rider_id: user.id,
+        driver_id: altDriver.id ?? null,
+        vehicle_id: altDriver.vehicleId ?? null,
+        pickup_address: pickup,
+        destination_address: destination,
+        estimated_fare: initialFare,
+        status: 'requested',
+      }).select().single()
+      if (error) throw error
+      navigate('/rider/active-ride', {
+        state: { rideId: data.id, driver: altDriver, fare: initialFare, pickup, destination, rideStatus: 'requested' },
+        replace: true,
+      })
+    } catch (err) {
+      alert('Could not request driver: ' + err.message)
+    }
+  }
 
-      {/* SOS Modal */}
-      {showSos && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(11,28,48,0.6)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <div style={{ width: '100%', maxWidth: 380, background: 'white', borderRadius: 20, padding: 28, textAlign: 'center' }}>
-            <div style={{ width: 56, height: 56, borderRadius: '50%', background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ba1a1a" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+  const startTime = new Date(Date.now() - 4 * 60000)
+  const fmt = d => d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+
+  if (rideStatus === 'expired') {
+    return (
+      <div style={{ minHeight: '100dvh', background: 'var(--color-background)', fontFamily: 'var(--font-sans)', display: 'flex', flexDirection: 'column', padding: '0 24px 40px' }}>
+        <header style={{ paddingTop: 56, marginBottom: 32 }}>
+          <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'var(--color-error-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+            <span className="material-symbols-outlined" style={{ fontSize: 28, color: 'var(--color-error)' }}>person_off</span>
+          </div>
+          <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 6 }}>Driver unavailable</h2>
+          <p style={{ fontSize: 15, color: 'var(--color-secondary)' }}>
+            {driver.name} couldn't take your ride. Pick another driver below.
+          </p>
+        </header>
+
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {alternates.length === 0 && (
+            <p style={{ fontSize: 14, color: 'var(--color-secondary)' }}>No other EV drivers online right now — check back soon.</p>
+          )}
+          {alternates.map(alt => (
+            <div key={alt.id} style={{ background: 'var(--color-surface)', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 16, flexShrink: 0 }}>
+                {alt.avatar}
+              </div>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 2 }}>{alt.name}</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, color: '#F59E0B' }}>★</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>{alt.rating}</span>
+                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {alt.type}</span>
+                </div>
+              </div>
+              <button onClick={() => handleRequestAlternate(alt)}
+                style={{ height: 40, padding: '0 16px', background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>
+                Request
+              </button>
             </div>
-            <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 8 }}>Emergency SOS</h3>
-            <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginBottom: 24 }}>This will alert Drivo Safety, share your live location, and contact your emergency numbers.</p>
-            <button style={{ width: '100%', height: 50, background: '#ba1a1a', color: 'white', borderRadius: 12, border: 'none', fontSize: 15, fontWeight: 700, cursor: 'pointer', marginBottom: 10 }}>
-              Call Emergency (112)
-            </button>
-            <button onClick={() => setShowSos(false)} style={{ width: '100%', height: 44, background: 'none', border: 'none', color: 'var(--color-secondary)', fontSize: 14, cursor: 'pointer' }}>
-              Cancel
-            </button>
+          ))}
+        </div>
+
+        <button onClick={() => navigate('/rider/home', { replace: true })}
+          style={{ width: '100%', height: 50, marginTop: 24, background: 'none', border: '1px solid var(--color-outline-variant)', borderRadius: 12, fontSize: 14, fontWeight: 600, color: 'var(--color-secondary)', cursor: 'pointer' }}>
+          Back to Home
+        </button>
+      </div>
+    )
+  }
+
+  if (rideStatus === 'requested') {
+    return (
+      <div style={{ minHeight: '100dvh', background: 'var(--color-background)', fontFamily: 'var(--font-sans)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 24px' }}>
+        {/* Pulsing ring */}
+        <div style={{ position: 'relative', width: 120, height: 120, marginBottom: 32 }}>
+          <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'rgba(0,109,55,0.1)', animation: 'ripple 2s infinite ease-in-out' }} />
+          <div style={{ position: 'absolute', inset: 16, borderRadius: '50%', background: 'rgba(0,109,55,0.18)', animation: 'ripple 2s infinite ease-in-out 0.4s' }} />
+          <div style={{ position: 'absolute', inset: 32, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: 28, color: 'white' }}>electric_car</span>
           </div>
         </div>
-      )}
+
+        <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 8, textAlign: 'center' }}>Waiting for driver…</h2>
+        <p style={{ fontSize: 15, color: 'var(--color-secondary)', textAlign: 'center', marginBottom: 8 }}>
+          {driver.name} is reviewing your request
+        </p>
+        <p style={{ fontSize: 13, color: 'var(--color-on-surface-variant)', textAlign: 'center', marginBottom: 40 }}>
+          This usually takes under 30 seconds
+        </p>
+
+        {/* Route summary */}
+        <div style={{ width: '100%', maxWidth: 360, background: 'var(--color-surface)', borderRadius: 16, padding: '16px 20px', boxShadow: '0 2px 12px rgba(26,43,60,0.08)', marginBottom: 24 }}>
+          <div className="flex items-center gap-3 mb-3">
+            <span className="material-symbols-outlined" style={{ fontSize: 18, color: 'var(--color-primary)' }}>radio_button_checked</span>
+            <p style={{ fontSize: 14, color: 'var(--color-on-surface)', fontWeight: 500 }}>{pickup}</p>
+          </div>
+          <div style={{ marginLeft: 9, width: 2, height: 16, background: 'var(--color-outline-variant)', marginBottom: 8 }} />
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined" style={{ fontSize: 18, color: 'var(--color-primary)' }}>location_on</span>
+            <p style={{ fontSize: 14, color: 'var(--color-on-surface)', fontWeight: 500 }}>{destination}</p>
+          </div>
+        </div>
+
+        <button onClick={handleCancel} disabled={cancelling}
+          style={{ width: '100%', maxWidth: 360, height: 52, background: 'var(--color-error-container)', color: 'var(--color-error)', border: 'none', borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: cancelling ? 'not-allowed' : 'pointer', opacity: cancelling ? 0.7 : 1 }}>
+          {cancelling ? 'Cancelling…' : 'Cancel Request'}
+        </button>
+
+        <style>{`
+          @keyframes ripple {
+            0%,100% { transform:scale(1); opacity:0.8; }
+            50% { transform:scale(1.15); opacity:0.3; }
+          }
+        `}</style>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ minHeight: '100dvh', background: 'var(--color-background)', fontFamily: 'var(--font-sans)', position: 'relative', overflow: 'hidden' }}>
 
       {/* Header */}
-      <header className="sticky top-0 z-40 flex items-center justify-between px-5 py-3"
-        style={{ background: 'var(--color-surface)', boxShadow: '0 1px 0 var(--color-surface-container-low)' }}>
+      <header className="fixed top-0 left-0 w-full z-50 flex justify-between items-center px-5 py-3"
+        style={{ background: 'var(--color-surface)', boxShadow: '0 1px 4px rgba(26,43,60,0.08)' }}>
         <div className="flex items-center gap-3">
+          <button onClick={() => navigate('/rider/home')}
+            style={{ width: 44, height: 44, borderRadius: '50%', background: 'none', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+            <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)' }}>arrow_back</span>
+          </button>
           <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)' }}>Active Ride</h1>
         </div>
-        <div style={{ background: 'var(--color-primary-container)', color: 'var(--color-on-primary-container)', padding: '4px 12px', borderRadius: 9999, fontSize: 12, fontWeight: 700, letterSpacing: '0.04em' }}>
+        <div style={{ background: 'var(--color-primary-container)', color: 'var(--color-on-primary-container)', padding: '4px 12px', borderRadius: 9999, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>verified</span>
           EV Eco
         </div>
       </header>
 
       {/* Map */}
-      <div style={{ position: 'relative', flex: '1 0 220px', background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)', overflow: 'hidden' }}>
-        {[20, 40, 60, 80].map(p => (
-          <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(46,204,113,0.12)' }} />
-        ))}
-        {[15, 30, 50, 65, 80].map(p => (
-          <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(46,204,113,0.12)' }} />
-        ))}
-        <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} viewBox="0 0 390 280" preserveAspectRatio="none">
-          <path d="M60 220 Q130 140 200 160 Q260 180 320 80 L360 50" stroke="#2ecc71" strokeWidth="3" strokeLinecap="round" fill="none" opacity="0.9" strokeDasharray="8 4"/>
-          {/* Car position marker */}
-          <circle cx="200" cy="160" r="14" fill="rgba(46,204,113,0.25)"/>
-          <circle cx="200" cy="160" r="7" fill="#2ecc71"/>
-          {/* Destination */}
-          <circle cx="360" cy="50" r="7" fill="#4ae183"/>
-          <circle cx="360" cy="50" r="14" fill="none" stroke="#4ae183" strokeWidth="1.5" opacity="0.5"/>
+      <div style={{ position: 'fixed', inset: 0, top: 56, background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)' }}>
+        {[20,40,60,80].map(p => <div key={`h${p}`} style={{ position:'absolute', top:`${p}%`, left:0, right:0, height:1, background:'rgba(46,204,113,0.1)' }} />)}
+        {[15,30,50,65,80].map(p => <div key={`v${p}`} style={{ position:'absolute', left:`${p}%`, top:0, bottom:0, width:1, background:'rgba(46,204,113,0.1)' }} />)}
+        <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%' }} viewBox="0 0 360 600" preserveAspectRatio="none">
+          <path d="M80 500 Q130 380 190 350 Q240 320 290 200 L320 120" stroke="#2ecc71" strokeWidth="3" strokeLinecap="round" fill="none" opacity="0.9"/>
         </svg>
-        {/* SOS button */}
-        <button onClick={() => setShowSos(true)}
-          style={{ position: 'absolute', top: 16, left: 16, background: '#ba1a1a', color: 'white', padding: '8px 16px', borderRadius: 9999, border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 4px 12px rgba(186,26,26,0.4)' }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        {/* Car marker */}
+        <div style={{ position:'absolute', top:'55%', left:'42%' }}>
+          <div style={{ position:'relative', display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <div style={{ position:'absolute', width:48, height:48, borderRadius:'50%', background:'rgba(0,109,55,0.2)', animation:'ripple 2s infinite ease-in-out' }} />
+            <div style={{ width:24, height:24, borderRadius:'50%', background:'var(--color-primary)', border:'2px solid white', display:'flex', alignItems:'center', justifyContent:'center', position:'relative', zIndex:1 }}>
+              <span className="material-symbols-outlined" style={{ fontSize:14, color:'white' }}>navigation</span>
+            </div>
+          </div>
+        </div>
+        {/* Destination label */}
+        <div style={{ position:'absolute', top:'22%', left:'60%' }}>
+          <div style={{ background:'var(--color-on-surface)', color:'white', padding:'4px 10px', borderRadius:8, fontSize:11, fontWeight:600, marginBottom:6, boxShadow:'0 2px 8px rgba(0,0,0,0.3)' }}>
+            {destination.split(' ').slice(0,2).join(' ')}
+          </div>
+          <div style={{ width:32, height:32, background:'var(--color-on-surface)', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 4px 12px rgba(0,0,0,0.3)' }}>
+            <span className="material-symbols-outlined" style={{ fontSize:18, color:'white', fontVariationSettings:"'FILL' 1" }}>location_on</span>
+          </div>
+        </div>
+        {/* Gradient scrim bottom */}
+        <div style={{ position:'absolute', inset:0, background:'linear-gradient(to bottom, rgba(248,249,255,0.7) 0%, rgba(248,249,255,0) 20%, rgba(248,249,255,0) 65%, rgba(248,249,255,0.9) 100%)', pointerEvents:'none' }} />
+      </div>
+
+      {/* Floating SOS */}
+      <div style={{ position:'fixed', top:72, left:20, zIndex:40 }}>
+        <button style={{ display:'flex', alignItems:'center', gap:6, background:'var(--color-error)', color:'white', padding:'8px 16px', borderRadius:9999, border:'none', fontSize:13, fontWeight:700, cursor:'pointer', boxShadow:'0 4px 16px rgba(186,26,26,0.35)' }}>
+          <span className="material-symbols-outlined" style={{ fontSize:18, fontVariationSettings:"'FILL' 1" }}>emergency_home</span>
           SOS
         </button>
-        {/* Destination label */}
-        <div style={{ position: 'absolute', top: 16, right: 16, background: 'rgba(248,249,255,0.9)', backdropFilter: 'blur(8px)', borderRadius: 8, padding: '6px 10px' }}>
-          <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-on-surface)' }}>🏁 MG Road Metro</p>
-        </div>
-        {/* Map controls */}
-        <div style={{ position: 'absolute', right: 16, bottom: 24, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {['⊕', '⊖'].map((icon, i) => (
-            <button key={i} style={{ width: 40, height: 40, background: 'rgba(248,249,255,0.92)', backdropFilter: 'blur(8px)', borderRadius: 10, border: 'none', fontSize: 18, cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
-              {icon}
-            </button>
-          ))}
-        </div>
       </div>
 
-      {/* Bottom Sheet */}
-      <div style={{ background: 'var(--color-surface)', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '16px 20px 32px', boxShadow: '0px -10px 30px rgba(26,43,60,0.12)' }}>
+      {/* Map controls */}
+      <div style={{ position:'fixed', top:72, right:20, zIndex:40, display:'flex', flexDirection:'column', gap:8 }}>
+        {['my_location','layers'].map(icon => (
+          <button key={icon} style={{ width:48, height:48, background:'var(--color-surface)', borderRadius:12, border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:'0 2px 8px rgba(26,43,60,0.12)' }}>
+            <span className="material-symbols-outlined" style={{ color:'var(--color-secondary)' }}>{icon}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Bottom sheet */}
+      <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:60, background:'var(--color-surface)', borderTopLeftRadius:24, borderTopRightRadius:24, boxShadow:'0 -10px 30px rgba(26,43,60,0.12)', maxHeight:'60vh', overflowY:'auto' }}>
         {/* Grabber */}
-        <div style={{ width: 48, height: 4, background: 'var(--color-surface-container-highest)', borderRadius: 2, margin: '0 auto 16px' }} />
+        <div style={{ display:'flex', justifyContent:'center', padding:'10px 0 4px' }}>
+          <div style={{ width:48, height:6, background:'var(--color-surface-container-highest)', borderRadius:3 }} />
+        </div>
 
         {/* ETA + Fare */}
-        <div className="flex items-end justify-between mb-4">
-          <div>
-            <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginBottom: 2 }}>Arriving in</p>
-            <p style={{ fontSize: 40, fontWeight: 700, color: 'var(--color-on-surface)', lineHeight: 1 }}>
-              {eta} <span style={{ fontSize: 18, fontWeight: 400, color: 'var(--color-secondary)' }}>mins</span>
-            </p>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginBottom: 2 }}>Estimated Fare</p>
-            <p style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-primary)' }}>₹{fare.toFixed(2)}</p>
-          </div>
-        </div>
-
-        {/* Progress Bar */}
-        <div style={{ background: 'var(--color-surface-container)', height: 6, borderRadius: 9999, overflow: 'hidden', marginBottom: 6 }}>
-          <div style={{ height: '100%', width: `${progress}%`, background: 'var(--color-primary)', borderRadius: 9999, transition: 'width 1s ease-in-out' }} />
-        </div>
-        <div className="flex justify-between mb-5" style={{ fontSize: 11, color: 'var(--color-secondary)' }}>
-          <span>Pickup confirmed</span>
-          <span>En route</span>
-          <span>Arrived</span>
-        </div>
-
-        {/* Driver Info */}
-        <div className="flex items-center gap-3 mb-5" style={{ background: 'var(--color-surface-container-low)', borderRadius: 14, padding: 14 }}>
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 18, border: '2px solid var(--color-primary-fixed)' }}>
-              {driver.avatar}
+        <div className="px-5 pb-4" style={{ borderBottom:'1px solid rgba(187,203,187,0.2)' }}>
+          <div className="flex justify-between items-end">
+            <div>
+              <p style={{ fontSize:12, color:'var(--color-secondary)', marginBottom:2 }}>Arriving in</p>
+              <h2 style={{ fontSize:36, fontWeight:700, color:'var(--color-on-surface)', lineHeight:1 }}>
+                {eta} <span style={{ fontSize:16, fontWeight:400, color:'var(--color-on-surface-variant)' }}>mins</span>
+              </h2>
             </div>
-            <div style={{ position: 'absolute', bottom: -2, right: -2, width: 20, height: 20, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid white' }}>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            <div style={{ textAlign:'right' }}>
+              <p style={{ fontSize:12, color:'var(--color-secondary)', marginBottom:2 }}>Est. Fare</p>
+              <p style={{ fontSize:22, fontWeight:700, color:'var(--color-primary)' }}>₹{fare.toFixed(2)}</p>
             </div>
           </div>
-          <div style={{ flex: 1 }}>
-            <p style={{ fontSize: 17, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.name}</p>
-            <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginTop: 2 }}>{driver.rating} Rating · {driver.type}</p>
+          {/* Progress bar */}
+          <div style={{ marginTop:12, height:8, background:'var(--color-surface-container)', borderRadius:9999, overflow:'hidden' }}>
+            <div style={{ height:'100%', width:`${progress}%`, background:'var(--color-primary)', borderRadius:9999, transition:'width 1s ease-in-out' }} />
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)', letterSpacing: '0.08em' }}>KA 05 EV 4821</p>
-            <span style={{ background: 'var(--color-on-surface)', color: 'var(--color-surface)', borderRadius: 4, fontSize: 10, fontWeight: 700, padding: '1px 6px' }}>EV</span>
+          <div className="flex justify-between mt-1" style={{ fontSize:11, color:'var(--color-on-surface-variant)' }}>
+            <span>Start: {fmt(startTime)}</span>
+            <span>ETA: {fmt(new Date(Date.now() + eta * 60000))}</span>
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 10 }}>
-          <button style={{ height: 48, background: 'var(--color-on-surface)', color: 'var(--color-surface)', borderRadius: 12, border: 'none', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        {/* Driver + Vehicle */}
+        <div className="px-5 py-4 flex gap-4">
+          <div className="flex items-center gap-3 flex-1">
+            <div style={{ position:'relative' }}>
+              <div style={{ width:64, height:64, borderRadius:'50%', background:'var(--color-primary)', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontWeight:700, fontSize:22, border:'2px solid var(--color-primary-container)' }}>
+                {driver.avatar}
+              </div>
+              <div style={{ position:'absolute', bottom:-2, right:-2, width:22, height:22, background:'var(--color-primary)', borderRadius:'50%', border:'2px solid var(--color-surface)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <span className="material-symbols-outlined" style={{ fontSize:12, color:'white', fontVariationSettings:"'FILL' 1" }}>star</span>
+              </div>
+            </div>
+            <div>
+              <p style={{ fontSize:18, fontWeight:700, color:'var(--color-on-surface)' }}>{driver.name}</p>
+              <p style={{ fontSize:13, color:'var(--color-on-surface-variant)' }}>{driver.rating} Rating · EV Certified</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 flex-1" style={{ background:'var(--color-surface-container-low)', borderRadius:16, padding:'10px 12px' }}>
+            <span className="material-symbols-outlined" style={{ fontSize:36, color:'var(--color-primary)' }}>directions_car</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <p style={{ fontSize:13, fontWeight:600, color:'var(--color-on-surface)' }}>{driver.type ?? 'EV Sedan'}</p>
+                <span style={{ background:'var(--color-on-surface)', color:'white', fontSize:10, fontWeight:700, padding:'1px 5px', borderRadius:3 }}>EV</span>
+              </div>
+              <p style={{ fontSize:11, color:'var(--color-on-surface-variant)', letterSpacing:'0.1em', marginTop:2 }}>KA · 05 EV 7890</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="px-5 pb-8 flex gap-3">
+          <button style={{ flex:1, height:48, background:'var(--color-on-surface)', color:'white', border:'none', borderRadius:12, fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6, cursor:'pointer' }}>
+            <span className="material-symbols-outlined" style={{ fontSize:18 }}>chat_bubble</span>
             Contact
           </button>
-          <button style={{ height: 48, background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', borderRadius: 12, border: 'none', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13"/></svg>
+          <button style={{ flex:1, height:48, background:'var(--color-surface-container-high)', color:'var(--color-on-surface)', border:'none', borderRadius:12, fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6, cursor:'pointer' }}>
+            <span className="material-symbols-outlined" style={{ fontSize:18 }}>share</span>
             Share Ride
           </button>
-          <button
-            onClick={() => navigate('/rider/ride-complete', { state: { driver, fare } })}
-            style={{ width: 48, height: 48, background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', borderRadius: 12, border: 'none', fontSize: 20, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            ···
+          <button onClick={handleCancel} disabled={cancelling}
+            style={{ width:48, height:48, background:'var(--color-error-container)', color:'var(--color-error)', border:'none', borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}>
+            <span className="material-symbols-outlined" style={{ fontSize:20 }}>cancel</span>
           </button>
         </div>
       </div>
+
+      <style>{`
+        @keyframes ripple {
+          0%,100% { transform:scale(1); opacity:0.8; }
+          50% { transform:scale(1.8); opacity:0.2; }
+        }
+      `}</style>
     </div>
   )
 }

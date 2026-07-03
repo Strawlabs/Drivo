@@ -2,14 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
-
-// ── Mock data ──────────────────────────────────────────────────
-const NEARBY_DRIVERS = [
-  { id: 1, name: 'Ramesh K.',   rating: 4.9, eta: '3 mins', type: 'EV Sedan',     battery: 94, avatar: 'RK', trips: 1240, safety: 4.9, languages: ['Hindi', 'English'], tags: ['EV Certified', 'Background Checked'] },
-  { id: 2, name: 'Priya S.',    rating: 4.8, eta: '5 mins', type: 'EV Hatchback', battery: 82, avatar: 'PS', trips: 870,  safety: 4.8, languages: ['Tamil', 'English'],  tags: ['EV Certified', 'Background Checked'] },
-  { id: 3, name: 'Anita M.',    rating: 5.0, eta: '7 mins', type: 'EV Auto',      battery: 76, avatar: 'AM', trips: 2100, safety: 5.0, languages: ['Kannada', 'English'], tags: ['EV Certified', 'Background Checked', 'Premium Tier'] },
-  { id: 4, name: 'Venkatesh R.', rating: 4.7, eta: '9 mins', type: 'EV Sedan',   battery: 88, avatar: 'VR', trips: 560,  safety: 4.7, languages: ['Telugu', 'English'],  tags: ['EV Certified'] },
-]
+import { fetchAvailableDrivers } from '@/lib/drivers'
 
 const PAST_TRIPS = [
   { id: 1, from: 'Koramangala 5th Block', to: 'MG Road Metro Station', date: 'Today, 9:14 AM',      fare: '₹184', distance: '6.2 km', duration: '18 mins', driver: 'Ramesh K.', rating: 5, status: 'completed' },
@@ -49,6 +42,11 @@ function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
 // ── TAB: Home ───────────────────────────────────────────────────
 function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
   const [search, setSearch] = useState('')
+  const [drivers, setDrivers] = useState([])
+
+  useEffect(() => {
+    fetchAvailableDrivers().then(setDrivers).catch(() => setDrivers([]))
+  }, [])
 
   return (
     <>
@@ -147,43 +145,43 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
         <div className="flex justify-between items-center mb-4 px-5">
           <h3 style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-on-surface)' }}>Nearby Drivers</h3>
           <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-secondary)', background: 'var(--color-surface-container)', padding: '2px 10px', borderRadius: 9999 }}>
-            8 active now
+            {drivers.length} active now
           </span>
         </div>
-        <div className="flex overflow-x-auto gap-3 px-5 pb-1" style={{ scrollbarWidth: 'none' }}>
-          {NEARBY_DRIVERS.map(driver => (
-            <div key={driver.id} className="flex flex-col gap-3" style={{ minWidth: 280, background: 'var(--color-surface)', border: '1px solid rgba(187,203,187,0.4)', borderRadius: 16, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', padding: 16, flexShrink: 0 }}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Avatar initials={driver.avatar} />
-                  <div>
-                    <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-on-surface)' }}>{driver.name}</p>
-                    <div className="flex items-center gap-1" style={{ marginTop: 2 }}>
-                      <StarIcon />
-                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
+        {drivers.length === 0 ? (
+          <p className="px-5" style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No EV drivers online right now — check back soon.</p>
+        ) : (
+          <div className="flex overflow-x-auto gap-3 px-5 pb-1" style={{ scrollbarWidth: 'none' }}>
+            {drivers.map(driver => (
+              <div key={driver.id} className="flex flex-col gap-3" style={{ minWidth: 280, background: 'var(--color-surface)', border: '1px solid rgba(187,203,187,0.4)', borderRadius: 16, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', padding: 16, flexShrink: 0 }}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Avatar initials={driver.avatar} />
+                    <div>
+                      <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-on-surface)' }}>{driver.name}</p>
+                      <div className="flex items-center gap-1" style={{ marginTop: 2 }}>
+                        <StarIcon />
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
+                      </div>
                     </div>
                   </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>Available now</p>
+                    <p style={{ fontSize: 10, color: 'var(--color-secondary)', marginTop: 2 }}>{driver.type}</p>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>{driver.eta} away</p>
-                  <p style={{ fontSize: 10, color: 'var(--color-secondary)', marginTop: 2 }}>{driver.type}</p>
+                <div className="flex justify-end items-center" style={{ background: 'var(--color-surface-container-low)', padding: '8px 12px', borderRadius: 12 }}>
+                  <button
+                    onClick={() => onBookDriver(driver)}
+                    style={{ background: 'var(--color-primary)', color: 'white', padding: '5px 16px', borderRadius: 9999, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Book
+                  </button>
                 </div>
               </div>
-              <div className="flex justify-between items-center" style={{ background: 'var(--color-surface-container-low)', padding: '8px 12px', borderRadius: 12 }}>
-                <div className="flex items-center gap-1.5">
-                  <span className="material-symbols-outlined" style={{ fontSize: 18, color: 'var(--color-primary)' }}>battery_charging_full</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.battery}%</span>
-                </div>
-                <button
-                  onClick={() => onBookDriver(driver)}
-                  style={{ background: 'var(--color-primary)', color: 'white', padding: '5px 16px', borderRadius: 9999, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
-                >
-                  Book
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Schedule a Ride */}
@@ -353,18 +351,16 @@ function TripsTab() {
 }
 
 // ── TAB: Drivers (Discovery) ─────────────────────────────────────
-const DISCOVERY_DRIVERS = [
-  { id: 1, name: 'Ramesh K.',    rating: 4.9, vehicle: 'Tesla Model S',  status: 'available',  eta: null,  avatar: 'RK', preferred: true,  trips: 1240 },
-  { id: 2, name: 'Priya S.',     rating: 4.8, vehicle: 'Lucid Air Pure', status: 'available',  eta: '5m',  avatar: 'PS', preferred: false, trips: 870  },
-  { id: 3, name: 'Anita M.',     rating: 5.0, vehicle: 'Rivian R1S',     status: 'on_ride',    eta: null,  avatar: 'AM', preferred: true,  trips: 2100 },
-  { id: 4, name: 'Venkatesh R.', rating: 4.7, vehicle: 'BYD Atto 3',     status: 'available',  eta: '8m',  avatar: 'VR', preferred: false, trips: 560  },
-]
-
 const FILTERS = ['EV Auto', 'EV Car', 'Distance']
 
-function DriversTab() {
+function DriversTab({ onBookDriver }) {
   const [view, setView] = useState('list')
   const [activeFilter, setActiveFilter] = useState('EV Auto')
+  const [drivers, setDrivers] = useState([])
+
+  useEffect(() => {
+    fetchAvailableDrivers().then(setDrivers).catch(() => setDrivers([]))
+  }, [])
 
   return (
     <div style={{ paddingBottom: 120 }}>
@@ -402,53 +398,47 @@ function DriversTab() {
 
       {/* Driver cards */}
       <div className="px-5 flex flex-col gap-3">
-        {DISCOVERY_DRIVERS.map(driver => {
-          const isOnRide = driver.status === 'on_ride'
-          const statusLabel = isOnRide ? 'Currently on ride' : driver.eta ? `Available in ${driver.eta}` : 'Available Now'
-          const statusColor = isOnRide ? 'var(--color-secondary)' : 'var(--color-primary)'
-
-          return (
-            <div key={driver.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)' }}>
-              <div className="flex items-start gap-3 mb-3">
-                <Avatar initials={driver.avatar} size={56} />
-                <div style={{ flex: 1 }}>
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-on-surface)' }}>{driver.name}</p>
-                        {driver.preferred && (
-                          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--color-primary)', background: 'rgba(0,109,55,0.1)', padding: '2px 7px', borderRadius: 9999 }}>PREFERRED</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <StarIcon />
-                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
-                        <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.vehicle}</span>
-                      </div>
+        {drivers.length === 0 && (
+          <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No EV drivers online right now — check back soon.</p>
+        )}
+        {drivers.map(driver => (
+          <div key={driver.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)' }}>
+            <div className="flex items-start gap-3 mb-3">
+              <Avatar initials={driver.avatar} size={56} />
+              <div style={{ flex: 1 }}>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-on-surface)' }}>{driver.name}</p>
                     </div>
-                    <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-secondary)" strokeWidth="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-                    </button>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <StarIcon />
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
+                      <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.type}</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5 mt-2">
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor, flexShrink: 0, display: 'inline-block' }} />
-                    <span style={{ fontSize: 12, fontWeight: 600, color: statusColor }}>{statusLabel}</span>
-                  </div>
+                  <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-secondary)" strokeWidth="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5 mt-2">
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-primary)', flexShrink: 0, display: 'inline-block' }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)' }}>Available Now</span>
                 </div>
               </div>
-
-              <div className="flex gap-2">
-                <button style={{ flex: 1, height: 40, border: '1px solid var(--color-outline-variant)', borderRadius: 10, background: 'none', fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
-                  View Profile
-                </button>
-                <button disabled={isOnRide}
-                  style={{ flex: 1, height: 40, border: 'none', borderRadius: 10, background: isOnRide ? 'var(--color-surface-container)' : 'var(--color-on-surface)', color: isOnRide ? 'var(--color-secondary)' : 'white', fontSize: 13, fontWeight: 600, cursor: isOnRide ? 'default' : 'pointer' }}>
-                  {isOnRide ? 'On Ride' : 'Request Ride'}
-                </button>
-              </div>
             </div>
-          )
-        })}
+
+            <div className="flex gap-2">
+              <button style={{ flex: 1, height: 40, border: '1px solid var(--color-outline-variant)', borderRadius: 10, background: 'none', fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
+                View Profile
+              </button>
+              <button onClick={() => onBookDriver(driver)}
+                style={{ flex: 1, height: 40, border: 'none', borderRadius: 10, background: 'var(--color-on-surface)', color: 'white', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                Request Ride
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Drivo Guarantee */}
@@ -617,7 +607,7 @@ export default function RiderHomePage() {
       <main className="flex-1 overflow-y-auto pb-28">
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} />}
         {activeNav === 'trips'   && <TripsTab />}
-        {activeNav === 'drivers' && <DriversTab />}
+        {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
         {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} />}
       </main>
 

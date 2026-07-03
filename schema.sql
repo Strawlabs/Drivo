@@ -304,3 +304,12 @@ create policy "dev_all_vehicles" on public.vehicles for all using (true);
 create policy "dev_all_rides" on public.rides for all using (true);
 create policy "dev_all_payments" on public.payments for all using (true);
 create policy "dev_all_notifications" on public.notifications for all using (true);
+
+-- ============================================================
+-- REALTIME
+-- Ride lifecycle (request/accept/track) depends on Supabase
+-- realtime broadcasting changes on `rides` — without this, no
+-- postgres_changes subscription ever fires.
+-- ============================================================
+
+alter publication supabase_realtime add table public.rides;
