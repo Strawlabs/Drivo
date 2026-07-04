@@ -353,3 +353,9 @@ create policy "dev_all_ad_campaigns" on public.ad_campaigns for all using (true)
 create policy "dev_all_driver_campaign_assignments" on public.driver_campaign_assignments for all using (true);
 
 create index if not exists payments_driver_status_idx on public.payments (driver_id, status);
+
+-- ============================================================
+-- GO HOME MODE TASK — same recurring gap, go_home_sessions.
+-- ============================================================
+
+create policy "dev_all_go_home_sessions" on public.go_home_sessions for all using (true);

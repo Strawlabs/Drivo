@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchDriverEarnings, summarizeForPeriod, bucketTrend, buildEarningsReportCsv, PERIOD_DAYS } from '@/lib/earnings'
+import { HOME_ZONES, validateGoHomeInput, activateGoHome, deactivateGoHome, fetchActiveGoHomeSession, matchGoHomeRide, toLocalDatetimeInputValue } from '@/lib/goHome'
 
 // ── Mock data ──────────────────────────────────────────────────
 const DISCOVERY_DRIVERS = [
@@ -40,7 +41,7 @@ function StarIcon() {
 }
 
 // ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription }) {
+function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome }) {
   return (
     <main className="mx-auto px-5 pb-32" style={{ maxWidth: 480, paddingTop: 24 }}>
       {/* Status Hero */}
@@ -95,12 +96,17 @@ function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle,
       {/* Quick Actions */}
       <p style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 12 }}>Quick Actions</p>
       <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 32 }}>
-        {[{ label: 'Go Home', icon: '📍' }, { label: 'Earnings', icon: '💰' }, { label: 'Drivo+', icon: '🎖️' }].map(({ label, icon }) => (
-          <button key={label} className="flex flex-col items-center gap-2" style={{ padding: 16, borderRadius: 12, border: 'none', background: 'transparent', cursor: 'pointer', transition: 'background 0.15s ease' }}
+        {[{ label: 'Go Home', icon: '📍', onClick: onOpenGoHome }, { label: 'Earnings', icon: '💰' }, { label: 'Drivo+', icon: '🎖️' }].map(({ label, icon, onClick }) => (
+          <button key={label} onClick={onClick} className="flex flex-col items-center gap-2" style={{ padding: 16, borderRadius: 12, border: 'none', background: 'transparent', cursor: onClick ? 'pointer' : 'default', transition: 'background 0.15s ease', position: 'relative' }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--color-surface-container)'}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
           >
-            <div style={{ width: 56, height: 56, background: 'var(--color-secondary-container)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{icon}</div>
+            <div style={{ width: 56, height: 56, background: 'var(--color-secondary-container)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, position: 'relative' }}>
+              {icon}
+              {label === 'Go Home' && goHomeSession && (
+                <span style={{ position: 'absolute', top: -2, right: -2, width: 12, height: 12, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid white' }} />
+              )}
+            </div>
             <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-on-surface)', textAlign: 'center' }}>{label}</span>
           </button>
         ))}
@@ -471,8 +477,123 @@ function FamilyTab() {
   )
 }
 
+// ── Go Home Mode ─────────────────────────────────────────────────
+function GoHomeModal({ session, driverProfileId, onClose, onActivated, onDeactivated }) {
+  const [zoneName, setZoneName] = useState(session?.preferred_route?.zone_name ?? HOME_ZONES[0].name)
+  const [radiusKm, setRadiusKm] = useState(session?.home_zone_radius_km ?? 3)
+  const [endTime, setEndTime] = useState(() => {
+    if (session?.end_time) return toLocalDatetimeInputValue(new Date(session.end_time))
+    return toLocalDatetimeInputValue(new Date(Date.now() + 2 * 60 * 60 * 1000))
+  })
+  const [note, setNote] = useState(session?.preferred_route?.note ?? '')
+  const [error, setError] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    if (!session) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [session])
+
+  async function handleActivate() {
+    setError(null)
+    const validationError = validateGoHomeInput({ zoneName, radiusKm: Number(radiusKm), endTime })
+    if (validationError) { setError(validationError); return }
+    setBusy(true)
+    try {
+      const newSession = await activateGoHome({ driverId: driverProfileId, zoneName, radiusKm: Number(radiusKm), endTime, note })
+      onActivated(newSession)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDeactivate() {
+    setBusy(true)
+    try {
+      await deactivateGoHome(session.id, 'cancelled')
+      onDeactivated()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const msLeft = session ? new Date(session.end_time).getTime() - now : 0
+  const minsLeft = Math.max(0, Math.floor(msLeft / 60000))
+  const hoursLeft = Math.floor(minsLeft / 60)
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(11,28,48,0.6)', backdropFilter: 'blur(4px)' }} />
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201, background: 'var(--color-surface)', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 20px 40px', boxShadow: '0 -10px 40px rgba(26,43,60,0.2)', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ width: 40, height: 4, background: 'var(--color-outline-variant)', borderRadius: 2, margin: '0 auto 20px' }} />
+        <div className="flex items-center justify-between mb-4">
+          <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)' }}>📍 Go Home Mode</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-secondary)' }}>✕</button>
+        </div>
+
+        {session ? (
+          <div className="flex flex-col gap-4">
+            <div style={{ background: 'rgba(0,109,55,0.08)', border: '1px solid rgba(0,109,55,0.25)', borderRadius: 14, padding: 16 }}>
+              <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-primary)', marginBottom: 4 }}>ACTIVE — heading toward {session.preferred_route?.zone_name}</p>
+              <p style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>Radius: {session.home_zone_radius_km} km · Ends in {hoursLeft > 0 ? `${hoursLeft}h ` : ''}{minsLeft % 60}m</p>
+              {session.preferred_route?.note && <p style={{ fontSize: 12, color: 'var(--color-secondary)', marginTop: 6 }}>Note: {session.preferred_route.note}</p>}
+            </div>
+            <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>
+              You'll get priority alerts for ride requests heading toward this area. Requests that aren't on your way home won't be shown while this is active.
+            </p>
+            <button onClick={handleDeactivate} disabled={busy}
+              style={{ width: '100%', height: 48, background: 'var(--color-error-container)', color: 'var(--color-error)', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+              {busy ? 'Ending…' : 'End Go Home Mode'}
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            {error && (
+              <p style={{ fontSize: 13, color: 'var(--color-error)', background: 'var(--color-error-container)', borderRadius: 10, padding: '8px 12px' }}>{error}</p>
+            )}
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>Home area</label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+                {HOME_ZONES.map(z => (
+                  <button key={z.name} onClick={() => setZoneName(z.name)}
+                    style={{ height: 40, borderRadius: 10, border: `2px solid ${zoneName === z.name ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: zoneName === z.name ? 'rgba(0,109,55,0.08)' : 'none', color: 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                    {z.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>Radius (km)</label>
+              <input type="number" min={1} max={15} value={radiusKm} onChange={e => setRadiusKm(e.target.value)}
+                style={{ width: '100%', height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14, marginTop: 6 }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>End time</label>
+              <input type="datetime-local" value={endTime} onChange={e => setEndTime(e.target.value)}
+                style={{ width: '100%', height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14, marginTop: 6 }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>Preferred route note (optional)</label>
+              <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. via Outer Ring Road"
+                style={{ width: '100%', height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14, marginTop: 6 }} />
+            </div>
+            <button onClick={handleActivate} disabled={busy}
+              style={{ width: '100%', height: 48, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+              {busy ? 'Activating…' : 'Activate Go Home Mode'}
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
 // ── Incoming Ride Request Modal ─────────────────────────────────
-function RideRequestModal({ ride, onAccept, onReject }) {
+function RideRequestModal({ ride, onAccept, onReject, goHomeMatch }) {
   const [countdown, setCountdown] = useState(30)
   useEffect(() => {
     const t = setInterval(() => setCountdown(c => {
@@ -491,6 +612,14 @@ function RideRequestModal({ ride, onAccept, onReject }) {
           <h3 style={{ fontSize:20, fontWeight:700, color:'var(--color-on-surface)' }}>New Ride Request</h3>
           <div style={{ width:44, height:44, borderRadius:'50%', border:`3px solid var(--color-primary)`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, fontWeight:700, color:'var(--color-primary)' }}>{countdown}</div>
         </div>
+        {goHomeMatch && (
+          <div style={{ background: 'rgba(0,109,55,0.1)', border: '1px solid rgba(0,109,55,0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 18 }}>📍</span>
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary)' }}>
+              Priority Match — {goHomeMatch.distanceKm} km from home · ₹{ride.estimated_fare} potential earnings
+            </p>
+          </div>
+        )}
         {/* Route */}
         <div className="flex gap-4 items-start mb-5" style={{ background:'var(--color-surface-container-low)', borderRadius:14, padding:'14px 16px' }}>
           <div className="flex flex-col items-center gap-1 pt-1">
@@ -545,6 +674,9 @@ export default function DriverHomePage() {
   const [driverRating, setDriverRating] = useState(5.0)
   const [preferredRidersCount, setPreferredRidersCount] = useState(0)
   const [subscription, setSubscription] = useState(null)
+  const [goHomeSession, setGoHomeSession] = useState(null)
+  const [showGoHomeModal, setShowGoHomeModal] = useState(false)
+  const [goHomeMatch, setGoHomeMatch] = useState(null)
 
   const [displayName, setDisplayName] = useState('Driver')
   const hour = new Date().getHours()
@@ -577,12 +709,24 @@ export default function DriverHomePage() {
     if (!driverProfileId || !isOnline) return
     const channel = supabase
       .channel('driver-rides-' + driverProfileId)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverProfileId}` }, payload => {
-        if (payload.new.status === 'requested') setIncomingRide(payload.new)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverProfileId}` }, async payload => {
+        if (payload.new.status !== 'requested') return
+        if (goHomeSession) {
+          const match = matchGoHomeRide(payload.new, goHomeSession)
+          if (!match.compatible) {
+            // Only route-compatible rides are suggested while Go Home Mode is active
+            await supabase.from('rides').update({ status: 'expired' }).eq('id', payload.new.id)
+            return
+          }
+          setGoHomeMatch(match)
+        } else {
+          setGoHomeMatch(null)
+        }
+        setIncomingRide(payload.new)
       })
       .subscribe()
     return () => supabase.removeChannel(channel)
-  }, [driverProfileId, isOnline])
+  }, [driverProfileId, isOnline, goHomeSession])
 
   // Today's earnings — completed payments only, refreshed live as riders pay
   useEffect(() => {
@@ -647,6 +791,25 @@ export default function DriverHomePage() {
       .subscribe()
     return () => supabase.removeChannel(channel)
   }, [driverProfileId])
+
+  // Go Home Mode — load any active session, and auto-expire it client-side
+  // once end_time passes (no backend cron for this, same as the UPI
+  // payment timeout).
+  useEffect(() => {
+    if (!driverProfileId) return
+    fetchActiveGoHomeSession(driverProfileId).then(setGoHomeSession)
+  }, [driverProfileId])
+
+  useEffect(() => {
+    if (!goHomeSession) return
+    const msLeft = new Date(goHomeSession.end_time).getTime() - Date.now()
+    if (msLeft <= 0) { setGoHomeSession(null); return }
+    const t = setTimeout(async () => {
+      await deactivateGoHome(goHomeSession.id, 'expired')
+      setGoHomeSession(null)
+    }, msLeft)
+    return () => clearTimeout(t)
+  }, [goHomeSession])
 
   async function handleAcceptRide() {
     if (!incomingRide || !driverProfileId) return
@@ -773,6 +936,18 @@ export default function DriverHomePage() {
           ride={incomingRide}
           onAccept={handleAcceptRide}
           onReject={handleRejectRide}
+          goHomeMatch={goHomeMatch}
+        />
+      )}
+
+      {/* Go Home Mode */}
+      {showGoHomeModal && (
+        <GoHomeModal
+          session={goHomeSession}
+          driverProfileId={driverProfileId}
+          onClose={() => setShowGoHomeModal(false)}
+          onActivated={session => { setGoHomeSession(session); setShowGoHomeModal(false) }}
+          onDeactivated={() => { setGoHomeSession(null); setShowGoHomeModal(false) }}
         />
       )}
 
@@ -795,9 +970,12 @@ export default function DriverHomePage() {
           </div>
         </div>
         <div className="flex flex-col gap-1" style={{ flex: 1 }}>
-          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode' }, { icon: '📊', label: 'Analytics' }, { icon: '⭐', label: 'Subscription' }, { icon: '📣', label: 'Ads' }, { icon: '⚙️', label: 'Settings' }].map(({ icon, label, active }) => (
-            <button key={label} className="flex items-center gap-4 text-left" style={{ padding: '10px 12px', borderRadius: 8, border: 'none', background: active ? 'var(--color-secondary-container)' : 'transparent', color: active ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)', fontSize: 16, fontWeight: active ? 700 : 400, cursor: 'pointer' }}>
+          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode', onClick: () => { setShowGoHomeModal(true); setDrawerOpen(false) } }, { icon: '📊', label: 'Analytics' }, { icon: '⭐', label: 'Subscription' }, { icon: '📣', label: 'Ads' }, { icon: '⚙️', label: 'Settings' }].map(({ icon, label, active, onClick }) => (
+            <button key={label} onClick={onClick} className="flex items-center gap-4 text-left" style={{ padding: '10px 12px', borderRadius: 8, border: 'none', background: active ? 'var(--color-secondary-container)' : 'transparent', color: active ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)', fontSize: 16, fontWeight: active ? 700 : 400, cursor: onClick ? 'pointer' : 'default' }}>
               <span style={{ fontSize: 18 }}>{icon}</span>{label}
+              {label === 'Go Home Mode' && goHomeSession && (
+                <span style={{ marginLeft: 'auto', width: 8, height: 8, borderRadius: '50%', background: 'var(--color-primary)', display: 'inline-block' }} />
+              )}
             </button>
           ))}
         </div>
@@ -822,7 +1000,7 @@ export default function DriverHomePage() {
 
       {/* Tab Content */}
       <div style={{ paddingBottom: 80 }}>
-        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} />}
+        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => setShowGoHomeModal(true)} />}
         {activeNav === 'discovery' && <DiscoveryTab />}
         {activeNav === 'rides'     && <RidesTab driverProfileId={driverProfileId} />}
         {activeNav === 'family'    && <FamilyTab />}
