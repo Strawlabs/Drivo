@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { buildUpiLink, initiateUpiPayment, confirmUpiPayment, failUpiPayment, payCash, generateReceipt } from '@/lib/payments'
+import { recalculateDriverRating } from '@/lib/drivers'
 
 const BADGES = ['Clean Car', 'Expert Driving', 'Great Chat', 'On Time', 'Safe Driver']
 const UPI_TIMEOUT_SECONDS = 120
@@ -28,6 +29,7 @@ export default function RideCompletePage() {
   const [badges, setBadges]     = useState([])
   const [comment, setComment]   = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [existingRating, setExistingRating] = useState(null)
 
   const [secondsLeft, setSecondsLeft] = useState(null)
   const [timedOut, setTimedOut] = useState(false)
@@ -110,6 +112,13 @@ export default function RideCompletePage() {
           if (existingReceipt) setReceipt(existingReceipt)
         }
       }
+
+      // ride_ratings.ride_id is unique — one review per ride. Check up front
+      // so we show a read-only "already rated" state instead of letting the
+      // rider submit a second time and hit a silent DB conflict.
+      const { data: ratingRow } = await supabase
+        .from('ride_ratings').select('*').eq('ride_id', rideId).maybeSingle()
+      if (ratingRow) setExistingRating(ratingRow)
     }
     load()
   }, [rideId])
@@ -200,7 +209,10 @@ export default function RideCompletePage() {
   async function handleSubmit() {
     if (submitting) return
     setSubmitting(true)
-    if (rideId && user && stars > 0) {
+    // Ratings only make sense for completed rides, and ride_ratings.ride_id
+    // is unique — skip the insert entirely if either condition doesn't hold
+    // rather than letting a duplicate/premature submit hit a DB conflict.
+    if (rideId && user && stars > 0 && !existingRating && ride?.status === 'completed') {
       const review = [comment.trim(), badges.length ? `Tags: ${badges.join(', ')}` : ''].filter(Boolean).join(' — ')
       const { error } = await supabase.from('ride_ratings').insert({
         ride_id: rideId,
@@ -209,7 +221,15 @@ export default function RideCompletePage() {
         rating: stars,
         review: review || null,
       })
-      if (error) console.error('Failed to save rating:', error.message)
+      if (error) {
+        console.error('Failed to save rating:', error.message)
+      } else if (ride?.driver_id) {
+        try {
+          await recalculateDriverRating(ride.driver_id)
+        } catch (err) {
+          console.error('Failed to recalculate driver rating:', err.message)
+        }
+      }
     }
     navigate('/rider/home', { replace: true })
   }
@@ -383,42 +403,68 @@ export default function RideCompletePage() {
             </div>
           </div>
 
-          {/* Stars */}
-          <div className="flex justify-center gap-3 py-3">
-            {[1,2,3,4,5].map(n => (
-              <button key={n} onClick={() => setStars(n)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'transform 0.1s' }}
-                onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.15)'}
-                onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
-                <span className="material-symbols-outlined" style={{ fontSize: 36, color: n <= stars ? 'var(--color-primary-container)' : 'var(--color-outline-variant)', fontVariationSettings: n <= stars ? "'FILL' 1" : "'FILL' 0" }}>star</span>
-              </button>
-            ))}
-          </div>
+          {existingRating ? (
+            <div style={{ textAlign: 'center', padding: '12px 0' }}>
+              <div className="flex justify-center gap-1 mb-2">
+                {[1,2,3,4,5].map(n => (
+                  <span key={n} className="material-symbols-outlined" style={{ fontSize: 28, color: n <= existingRating.rating ? 'var(--color-primary-container)' : 'var(--color-outline-variant)', fontVariationSettings: n <= existingRating.rating ? "'FILL' 1" : "'FILL' 0" }}>star</span>
+                ))}
+              </div>
+              <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>You've already rated this ride.</p>
+              {existingRating.review && (
+                <p style={{ fontSize: 13, color: 'var(--color-on-surface)', marginTop: 8, fontStyle: 'italic' }}>"{existingRating.review}"</p>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Stars */}
+              <div className="flex justify-center gap-3 py-3">
+                {[1,2,3,4,5].map(n => (
+                  <button key={n} onClick={() => setStars(n)}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'transform 0.1s' }}
+                    onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.15)'}
+                    onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 36, color: n <= stars ? 'var(--color-primary-container)' : 'var(--color-outline-variant)', fontVariationSettings: n <= stars ? "'FILL' 1" : "'FILL' 0" }}>star</span>
+                  </button>
+                ))}
+              </div>
 
-          <textarea
-            value={comment}
-            onChange={e => setComment(e.target.value)}
-            placeholder="Add a comment (optional)..."
-            rows={3}
-            style={{ width: '100%', background: 'var(--color-surface-container-low)', border: 'none', borderRadius: 12, padding: '10px 14px', fontSize: 14, color: 'var(--color-on-surface)', resize: 'none', outline: 'none', boxSizing: 'border-box', marginTop: 4 }}
-          />
+              <textarea
+                value={comment}
+                onChange={e => setComment(e.target.value)}
+                placeholder="Add a comment (optional)..."
+                rows={3}
+                style={{ width: '100%', background: 'var(--color-surface-container-low)', border: 'none', borderRadius: 12, padding: '10px 14px', fontSize: 14, color: 'var(--color-on-surface)', resize: 'none', outline: 'none', boxSizing: 'border-box', marginTop: 4 }}
+              />
+            </>
+          )}
         </section>
 
-        {/* Feedback badges */}
-        <div className="flex flex-wrap gap-2">
-          {BADGES.map(b => (
-            <button key={b} onClick={() => toggleBadge(b)}
-              style={{ padding: '5px 14px', borderRadius: 9999, fontSize: 12, fontWeight: 600, border: `1px solid ${badges.includes(b) ? 'var(--color-primary)' : 'rgba(0,109,55,0.2)'}`, background: badges.includes(b) ? 'rgba(0,109,55,0.1)' : 'rgba(46,204,113,0.06)', color: 'var(--color-on-primary-container)', cursor: 'pointer', transition: 'all 0.15s' }}>
-              {b}
-            </button>
-          ))}
-        </div>
+        {!existingRating && (
+          <>
+            {/* Feedback badges */}
+            <div className="flex flex-wrap gap-2">
+              {BADGES.map(b => (
+                <button key={b} onClick={() => toggleBadge(b)}
+                  style={{ padding: '5px 14px', borderRadius: 9999, fontSize: 12, fontWeight: 600, border: `1px solid ${badges.includes(b) ? 'var(--color-primary)' : 'rgba(0,109,55,0.2)'}`, background: badges.includes(b) ? 'rgba(0,109,55,0.1)' : 'rgba(46,204,113,0.06)', color: 'var(--color-on-primary-container)', cursor: 'pointer', transition: 'all 0.15s' }}>
+                  {b}
+                </button>
+              ))}
+            </div>
 
-        {/* Submit */}
-        <button onClick={handleSubmit} disabled={submitting}
-          style={{ width: '100%', height: 52, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 9999, fontSize: 15, fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer', opacity: submitting ? 0.7 : 1, boxShadow: '0 4px 16px rgba(0,109,55,0.25)', transition: 'all 0.2s' }}>
-          {submitting ? 'Submitting…' : 'Submit Feedback & Done'}
-        </button>
+            {/* Submit */}
+            <button onClick={handleSubmit} disabled={submitting}
+              style={{ width: '100%', height: 52, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 9999, fontSize: 15, fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer', opacity: submitting ? 0.7 : 1, boxShadow: '0 4px 16px rgba(0,109,55,0.25)', transition: 'all 0.2s' }}>
+              {submitting ? 'Submitting…' : 'Submit Feedback & Done'}
+            </button>
+          </>
+        )}
+        {existingRating && (
+          <button onClick={() => navigate('/rider/home', { replace: true })}
+            style={{ width: '100%', height: 52, background: 'var(--color-surface-container)', color: 'var(--color-on-surface)', border: 'none', borderRadius: 9999, fontSize: 15, fontWeight: 700, cursor: 'pointer' }}>
+            Done
+          </button>
+        )}
       </main>
     </div>
   )

@@ -314,6 +314,7 @@ create policy "dev_all_notifications" on public.notifications for all using (tru
 
 alter publication supabase_realtime add table public.rides;
 alter publication supabase_realtime add table public.payments;
+alter publication supabase_realtime add table public.driver_profiles;
 
 -- ============================================================
 -- STORAGE — receipts bucket
@@ -336,3 +337,19 @@ create policy "dev_all_receipts_objects"
 
 create policy "dev_all_ride_ratings" on public.ride_ratings for all using (true);
 create policy "dev_all_receipts" on public.receipts for all using (true);
+
+-- ============================================================
+-- DRIVER DASHBOARD TASK — same recurring gap: preferred_drivers,
+-- subscription_plans, driver_subscriptions, ad_campaigns, and
+-- driver_campaign_assignments all have RLS enabled with zero
+-- policies, silently blocking both reads and writes. Confirmed via
+-- direct REST calls (insert -> 42501, select -> empty with no error).
+-- ============================================================
+
+create policy "dev_all_preferred_drivers" on public.preferred_drivers for all using (true);
+create policy "dev_all_subscription_plans" on public.subscription_plans for all using (true);
+create policy "dev_all_driver_subscriptions" on public.driver_subscriptions for all using (true);
+create policy "dev_all_ad_campaigns" on public.ad_campaigns for all using (true);
+create policy "dev_all_driver_campaign_assignments" on public.driver_campaign_assignments for all using (true);
+
+create index if not exists payments_driver_status_idx on public.payments (driver_id, status);

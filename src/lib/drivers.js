@@ -31,3 +31,28 @@ export async function fetchAvailableDrivers({ excludeDriverId } = {}) {
     }
   })
 }
+
+/*
+  Recomputes driver_profiles.rating as the plain average of every
+  ride_ratings row for that driver, and keeps total_rides in sync.
+  Called after a rider submits a review so the reputation score
+  actually reflects submitted reviews (there's no DB trigger for this).
+*/
+export async function recalculateDriverRating(driverId) {
+  const { data, error } = await supabase
+    .from('ride_ratings')
+    .select('rating')
+    .eq('driver_id', driverId)
+  if (error) throw error
+
+  const ratings = data ?? []
+  if (ratings.length === 0) return
+
+  const average = ratings.reduce((sum, r) => sum + r.rating, 0) / ratings.length
+
+  const { error: updateErr } = await supabase
+    .from('driver_profiles')
+    .update({ rating: Math.round(average * 100) / 100, total_rides: ratings.length })
+    .eq('id', driverId)
+  if (updateErr) throw updateErr
+}

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
+import { fetchDriverEarnings, summarizeForPeriod, bucketTrend, buildEarningsReportCsv, PERIOD_DAYS } from '@/lib/earnings'
 
 // ── Mock data ──────────────────────────────────────────────────
 const DISCOVERY_DRIVERS = [
@@ -9,13 +10,6 @@ const DISCOVERY_DRIVERS = [
   { id: 2, name: 'Elena Rodriguez', rating: 4.92, vehicle: 'Lucid Air Pure', status: 'available', preferred: false, eta: '5m', avatar: 'ER' },
   { id: 3, name: 'Sarah Jenkins',   rating: 5.00, vehicle: 'Rivian R1S',     status: 'on_ride',   preferred: true,  avatar: 'SJ' },
   { id: 4, name: 'Arjun Mehta',     rating: 4.87, vehicle: 'BYD Atto 3',    status: 'available', preferred: false, eta: '8m', avatar: 'AM' },
-]
-
-const RIDE_HISTORY = [
-  { time: '14:22', rider: 'Elena V.', type: 'Premium EV', fare: '₹312', km: '9.8' },
-  { time: '13:45', rider: 'Julian S.', type: 'Standard EV', fare: '₹184', km: '6.2' },
-  { time: '12:10', rider: 'Sofia R.', type: 'Premium EV', fare: '₹520', km: '14.1' },
-  { time: '10:34', rider: 'Ravi K.', type: 'Standard EV', fare: '₹248', km: '7.6' },
 ]
 
 const FAMILY_MEMBERS = [
@@ -46,7 +40,7 @@ function StarIcon() {
 }
 
 // ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount }) {
+function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription }) {
   return (
     <main className="mx-auto px-5 pb-32" style={{ maxWidth: 480, paddingTop: 24 }}>
       {/* Status Hero */}
@@ -82,7 +76,14 @@ function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle,
           </div>
           <div style={{ position: 'absolute', right: -32, bottom: -32, width: 128, height: 128, background: 'rgba(0,109,55,0.05)', borderRadius: '50%', filter: 'blur(24px)' }} />
         </div>
-        {[{ icon: '🚗', label: 'Trips', value: '14' }, { icon: '⭐', label: 'Rating', value: '4.98' }].map(({ icon, label, value }) => (
+        {[
+          { icon: '🚗', label: 'Trips',            value: String(todayTripsCount) },
+          { icon: '⭐', label: 'Rating',            value: Number(driverRating).toFixed(2) },
+          { icon: '💚', label: 'Preferred Riders',  value: String(preferredRidersCount) },
+          { icon: '🎖️', label: 'Subscription',      value: subscription?.subscription_plans?.name
+              ? subscription.subscription_plans.name.charAt(0).toUpperCase() + subscription.subscription_plans.name.slice(1)
+              : 'None' },
+        ].map(({ icon, label, value }) => (
           <div key={label} style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
             <span style={{ fontSize: 22, marginBottom: 4 }}>{icon}</span>
             <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>{label}</p>
@@ -217,11 +218,34 @@ function DiscoveryTab() {
 }
 
 // ── TAB: Rides (Performance Insights) ──────────────────────────
-function RidesTab() {
-  const [period, setPeriod] = useState('Daily')
+const PERIOD_LABEL = { Daily: "TODAY'S TOTAL", Weekly: "THIS WEEK'S TOTAL", Monthly: "THIS MONTH'S TOTAL" }
 
-  const bars = [55, 70, 45, 80, 100, 65, 50]
-  const labels = ['08:00', '', '', 'Now', '', '', '22:00']
+function RidesTab({ driverProfileId }) {
+  const [period, setPeriod] = useState('Daily')
+  const [earningsData, setEarningsData] = useState(null)
+
+  useEffect(() => {
+    if (!driverProfileId) return
+    fetchDriverEarnings(driverProfileId).then(setEarningsData)
+  }, [driverProfileId])
+
+  const summary = earningsData ? summarizeForPeriod(earningsData, period) : null
+  const bars = earningsData ? bucketTrend(earningsData, period) : []
+  const maxBar = Math.max(1, ...bars.map(b => b.value))
+  const recentTrips = earningsData ? earningsData.payments.slice(0, 10) : []
+  const pct = (n) => (summary && summary.total > 0 ? Math.round((n / summary.total) * 100) : 0)
+
+  function handleDownloadReport() {
+    if (!summary) return
+    const csv = buildEarningsReportCsv(summary.periodPayments, period)
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `drivo-earnings-${period.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div className="px-5 pt-6 pb-8">
@@ -238,44 +262,45 @@ function RidesTab() {
       {/* Earnings card with chart */}
       <div style={{ background: 'white', borderRadius: 20, padding: 20, boxShadow: '0 2px 12px rgba(26,43,60,0.08)', marginBottom: 16 }}>
         <div className="flex justify-between items-start mb-1">
-          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--color-primary)', background: 'rgba(0,109,55,0.1)', padding: '2px 8px', borderRadius: 9999 }}>TODAY'S TOTAL</span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary)' }}>↑ 12% vs avg</span>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--color-primary)', background: 'rgba(0,109,55,0.1)', padding: '2px 8px', borderRadius: 9999 }}>{PERIOD_LABEL[period]}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-secondary)' }}>{summary?.tripCount ?? 0} rides</span>
         </div>
-        <h2 style={{ fontSize: 40, fontWeight: 700, color: 'var(--color-on-surface)', letterSpacing: '-0.02em', margin: '8px 0 20px' }}>₹342.80</h2>
+        <h2 style={{ fontSize: 40, fontWeight: 700, color: 'var(--color-on-surface)', letterSpacing: '-0.02em', margin: '8px 0 20px' }}>₹{(summary?.total ?? 0).toFixed(2)}</h2>
         {/* Bar chart */}
         <div className="flex items-end justify-between gap-1.5" style={{ height: 80, marginBottom: 8 }}>
-          {bars.map((h, i) => (
+          {bars.map((b, i) => (
             <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
-              <div style={{ width: '100%', height: `${h}%`, background: i === 3 ? 'var(--color-primary)' : 'var(--color-surface-container)', borderRadius: '4px 4px 0 0', transition: 'height 0.3s' }} />
+              <div style={{ width: '100%', height: `${Math.max(4, (b.value / maxBar) * 100)}%`, background: i === bars.length - 1 ? 'var(--color-primary)' : 'var(--color-surface-container)', borderRadius: '4px 4px 0 0', transition: 'height 0.3s' }} />
             </div>
           ))}
         </div>
         <div className="flex justify-between">
-          {labels.map((l, i) => <span key={i} style={{ fontSize: 10, color: 'var(--color-secondary)', flex: 1, textAlign: 'center' }}>{l}</span>)}
+          {bars.map((b, i) => <span key={i} style={{ fontSize: 10, color: 'var(--color-secondary)', flex: 1, textAlign: 'center' }}>{b.label}</span>)}
         </div>
+        <button onClick={handleDownloadReport} disabled={!summary}
+          style={{ width: '100%', height: 40, marginTop: 16, background: 'var(--color-surface-container-low)', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 600, color: 'var(--color-primary)', cursor: summary ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>download</span>
+          Download {period} Earnings Report (CSV)
+        </button>
       </div>
 
       {/* Digital Ad Revenue */}
       <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginBottom: 12 }}>
         <div style={{ width: 36, height: 36, background: 'var(--color-surface-container)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, marginBottom: 8 }}>📡</div>
         <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginBottom: 2 }}>Digital Ad Revenue</p>
-        <p style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 10 }}>₹54.20</p>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-          <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>Goal ₹60</span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)' }}>90%</span>
-        </div>
-        <div style={{ height: 6, borderRadius: 9999, background: 'var(--color-surface-container)', overflow: 'hidden' }}>
-          <div style={{ width: '90%', height: '100%', background: 'var(--color-primary)', borderRadius: 9999 }} />
-        </div>
+        <p style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 4 }}>₹{(summary?.adRevenue ?? 0).toFixed(2)}</p>
+        <p style={{ fontSize: 12, color: 'var(--color-secondary)' }}>
+          {summary?.adRevenue ? 'From active ad campaign assignments' : 'No ad campaigns assigned yet'}
+        </p>
       </div>
 
-      {/* Rider Bonuses */}
+      {/* Preferred Rider Earnings */}
       <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginBottom: 12 }}>
-        <div style={{ width: 36, height: 36, background: 'var(--color-surface-container)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, marginBottom: 8 }}>⭐</div>
-        <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginBottom: 2 }}>Rider Bonuses</p>
-        <p style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 10 }}>₹28.00</p>
+        <div style={{ width: 36, height: 36, background: 'var(--color-surface-container)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, marginBottom: 8 }}>💚</div>
+        <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginBottom: 2 }}>Preferred Rider Earnings</p>
+        <p style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 10 }}>₹{(summary?.preferredRiderRides ?? 0).toFixed(2)}</p>
         <div style={{ background: 'rgba(0,109,55,0.07)', border: '1px solid rgba(0,109,55,0.2)', borderRadius: 10, padding: '8px 12px', fontSize: 13, color: 'var(--color-primary)', fontWeight: 600 }}>
-          🎯 4 Preferred rider matches today
+          🎯 {earningsData?.preferredRiderIds.size ?? 0} riders have you as preferred
         </div>
       </div>
 
@@ -283,17 +308,17 @@ function RidesTab() {
       <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginBottom: 16 }}>
         <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 14 }}>Revenue Breakdown</p>
         {[
-          { label: 'Base Fare Revenue', amount: '₹210.60', pct: 62 },
-          { label: 'EV Eco-Incentives',  amount: '₹50.00',  pct: 15 },
-          { label: 'Tips',               amount: '₹82.20',  pct: 24 },
-        ].map(({ label, amount, pct }) => (
+          { label: 'Ride Payments',          amount: summary?.ridePayments ?? 0 },
+          { label: 'Preferred Rider Rides',  amount: summary?.preferredRiderRides ?? 0 },
+          { label: 'Ad Revenue',             amount: summary?.adRevenue ?? 0 },
+        ].map(({ label, amount }) => (
           <div key={label} style={{ marginBottom: 14 }}>
             <div className="flex justify-between mb-1">
               <span style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{label}</span>
-              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)' }}>{amount}</span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)' }}>₹{amount.toFixed(2)}</span>
             </div>
             <div style={{ height: 6, borderRadius: 9999, background: 'var(--color-surface-container)', overflow: 'hidden' }}>
-              <div style={{ width: `${pct}%`, height: '100%', background: 'var(--color-primary)', borderRadius: 9999 }} />
+              <div style={{ width: `${pct(amount)}%`, height: '100%', background: 'var(--color-primary)', borderRadius: 9999 }} />
             </div>
           </div>
         ))}
@@ -301,22 +326,28 @@ function RidesTab() {
 
       {/* Ride History */}
       <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)' }}>
-        <div className="flex justify-between items-center mb-14">
-          <p style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-on-surface)' }}>Ride History</p>
-          <button style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer' }}>View All →</button>
+        <div className="flex justify-between items-center mb-4">
+          <p style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-on-surface)' }}>Recent Completed Trips</p>
         </div>
-        <div className="flex justify-between mb-3" style={{ paddingBottom: 8, borderBottom: '1px solid var(--color-outline-variant)' }}>
-          {['TIME', 'RIDER', 'TYPE', 'FARE'].map(h => <span key={h} style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--color-secondary)' }}>{h}</span>)}
-        </div>
-        {RIDE_HISTORY.map((ride, i) => (
-          <div key={i} className="flex justify-between items-center" style={{ paddingTop: 12, paddingBottom: 12, borderBottom: i < RIDE_HISTORY.length - 1 ? '1px solid var(--color-outline-variant)' : 'none' }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)', minWidth: 44 }}>{ride.time}</span>
+        {recentTrips.length === 0 && (
+          <p style={{ fontSize: 13, color: 'var(--color-secondary)', padding: '12px 0' }}>No completed, paid trips yet.</p>
+        )}
+        {recentTrips.length > 0 && (
+          <div className="flex justify-between mb-3" style={{ paddingBottom: 8, borderBottom: '1px solid var(--color-outline-variant)' }}>
+            {['TIME', 'RIDER', 'DISTANCE', 'FARE'].map(h => <span key={h} style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--color-secondary)' }}>{h}</span>)}
+          </div>
+        )}
+        {recentTrips.map((p, i) => (
+          <div key={p.id} className="flex justify-between items-center" style={{ paddingTop: 12, paddingBottom: 12, borderBottom: i < recentTrips.length - 1 ? '1px solid var(--color-outline-variant)' : 'none' }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)', minWidth: 44 }}>
+              {p.paidAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+            </span>
             <div className="flex items-center gap-2">
               <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--color-surface-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>👤</div>
-              <span style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{ride.rider}</span>
+              <span style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{p.users?.name ?? 'Rider'}</span>
             </div>
-            <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{ride.type}</span>
-            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-primary)' }}>{ride.fare}</span>
+            <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{p.rides?.distance_km ? `${p.rides.distance_km} km` : '—'}</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-primary)' }}>₹{Number(p.amount).toFixed(2)}</span>
           </div>
         ))}
       </div>
@@ -511,6 +542,9 @@ export default function DriverHomePage() {
   const [activeRide, setActiveRide] = useState(null)
   const [todayEarnings, setTodayEarnings] = useState(0)
   const [todayTripsCount, setTodayTripsCount] = useState(0)
+  const [driverRating, setDriverRating] = useState(5.0)
+  const [preferredRidersCount, setPreferredRidersCount] = useState(0)
+  const [subscription, setSubscription] = useState(null)
 
   const [displayName, setDisplayName] = useState('Driver')
   const hour = new Date().getHours()
@@ -521,13 +555,14 @@ export default function DriverHomePage() {
     async function load() {
       const [vRes, dRes, uRes] = await Promise.all([
         supabase.from('vehicles').select('*').eq('driver_id', user.id).maybeSingle(),
-        supabase.from('driver_profiles').select('id, is_online, status, kyc_status').eq('user_id', user.id).maybeSingle(),
+        supabase.from('driver_profiles').select('id, is_online, status, kyc_status, rating').eq('user_id', user.id).maybeSingle(),
         supabase.from('users').select('name').eq('id', user.id).single(),
       ])
       if (vRes.data) setVehicle(vRes.data)
       if (dRes.data) {
         setIsOnline(dRes.data.is_online ?? false)
         setDriverProfileId(dRes.data.id)
+        setDriverRating(dRes.data.rating ?? 5.0)
         if (dRes.data.kyc_status !== 'approved') {
           navigate('/driver/verification', { replace: true })
         }
@@ -572,6 +607,43 @@ export default function DriverHomePage() {
     const channel = supabase
       .channel('driver-earnings-' + driverProfileId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `driver_id=eq.${driverProfileId}` }, loadEarnings)
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [driverProfileId])
+
+  // Preferred riders — how many riders have saved this driver as preferred
+  useEffect(() => {
+    if (!driverProfileId) return
+    supabase
+      .from('preferred_drivers')
+      .select('id', { count: 'exact', head: true })
+      .eq('driver_id', driverProfileId)
+      .eq('status', 'active')
+      .then(({ count }) => setPreferredRidersCount(count ?? 0))
+  }, [driverProfileId])
+
+  // Subscription status — most recent active plan, if any
+  useEffect(() => {
+    if (!driverProfileId) return
+    supabase
+      .from('driver_subscriptions')
+      .select('status, expiry_date, subscription_plans(name)')
+      .eq('driver_id', driverProfileId)
+      .eq('status', 'active')
+      .order('expiry_date', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => setSubscription(data ?? null))
+  }, [driverProfileId])
+
+  // Driver rating updates live as riders submit reviews (see recalculateDriverRating)
+  useEffect(() => {
+    if (!driverProfileId) return
+    const channel = supabase
+      .channel('driver-rating-' + driverProfileId)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'driver_profiles', filter: `id=eq.${driverProfileId}` }, payload => {
+        if (payload.new.rating != null) setDriverRating(payload.new.rating)
+      })
       .subscribe()
     return () => supabase.removeChannel(channel)
   }, [driverProfileId])
@@ -750,9 +822,9 @@ export default function DriverHomePage() {
 
       {/* Tab Content */}
       <div style={{ paddingBottom: 80 }}>
-        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} />}
+        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} />}
         {activeNav === 'discovery' && <DiscoveryTab />}
-        {activeNav === 'rides'     && <RidesTab />}
+        {activeNav === 'rides'     && <RidesTab driverProfileId={driverProfileId} />}
         {activeNav === 'family'    && <FamilyTab />}
       </div>
 
