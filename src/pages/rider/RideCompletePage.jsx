@@ -1,36 +1,178 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/hooks/useAuth.jsx'
+import { buildUpiLink, initiateUpiPayment, confirmUpiPayment, failUpiPayment, payCash, generateReceipt } from '@/lib/payments'
 
 const BADGES = ['Clean Car', 'Expert Driving', 'Great Chat', 'On Time', 'Safe Driver']
 
 export default function RideCompletePage() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { user } = useAuth()
 
-  const rideId      = location.state?.rideId      ?? null
-  const driver      = location.state?.driver      ?? { name: 'Ramesh K.', rating: 4.9, avatar: 'RK' }
-  const fare        = location.state?.fare        ?? 284
-  const pickup      = location.state?.pickup      ?? 'Koramangala 5th Block'
-  const destination = location.state?.destination ?? 'MG Road Metro Station'
+  const rideId = location.state?.rideId ?? null
+  const driverFallback = location.state?.driver ?? { name: 'Ramesh K.', rating: 4.9, avatar: 'RK' }
+
+  const [ride, setRide] = useState(null)
+  const [driverInfo, setDriverInfo] = useState({ ...driverFallback, upiId: null })
+  const [payment, setPayment] = useState(null)
+  const [receipt, setReceipt] = useState(null)
+  const [payMethod, setPayMethod] = useState(null) // 'upi' | 'cash' | null — which flow the rider is mid-confirming
+  const [upiRef, setUpiRef] = useState('')
+  const [paying, setPaying] = useState(false)
+  const [payError, setPayError] = useState(null)
 
   const [stars, setStars]       = useState(0)
   const [badges, setBadges]     = useState([])
   const [comment, setComment]   = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  const fare = ride?.final_fare ?? location.state?.fare ?? 284
+
+  useEffect(() => {
+    if (!rideId) return
+    async function load() {
+      const { data: rideRow } = await supabase.from('rides').select('*').eq('id', rideId).single()
+      if (!rideRow) return
+      setRide(rideRow)
+
+      if (rideRow.driver_id) {
+        const { data: dp } = await supabase
+          .from('driver_profiles')
+          .select('rating, upi_id, users(name)')
+          .eq('id', rideRow.driver_id)
+          .maybeSingle()
+        if (dp) {
+          const name = dp.users?.name ?? driverFallback.name
+          setDriverInfo({
+            name,
+            avatar: name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+            rating: dp.rating ?? driverFallback.rating,
+            upiId: dp.upi_id,
+          })
+        }
+      }
+
+      const { data: paymentRow } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('ride_id', rideId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (paymentRow) {
+        setPayment(paymentRow)
+        setPayMethod(paymentRow.method)
+        if (paymentRow.status === 'completed') {
+          const { data: existingReceipt } = await supabase
+            .from('receipts').select('*').eq('payment_id', paymentRow.id).maybeSingle()
+          if (existingReceipt) setReceipt(existingReceipt)
+        }
+      }
+    }
+    load()
+  }, [rideId])
+
   function toggleBadge(b) {
     setBadges(prev => prev.includes(b) ? prev.filter(x => x !== b) : [...prev, b])
+  }
+
+  async function handlePayUpi() {
+    if (!ride || !user) return
+    setPayError(null)
+    if (!driverInfo.upiId) {
+      setPayError("This driver hasn't set up a UPI id yet — pay cash instead.")
+      return
+    }
+    setPaying(true)
+    try {
+      const p = await initiateUpiPayment({ rideId: ride.id, riderId: user.id, driverId: ride.driver_id, amount: fare })
+      setPayment(p)
+      setPayMethod('upi')
+      const link = buildUpiLink({
+        upiId: driverInfo.upiId,
+        payeeName: driverInfo.name,
+        amount: fare,
+        note: `Drivo ride ${ride.id.slice(0, 8)}`,
+      })
+      window.location.href = link
+    } catch (err) {
+      setPayError(err.message)
+    } finally {
+      setPaying(false)
+    }
+  }
+
+  async function handleConfirmUpi() {
+    if (!payment) return
+    setPaying(true)
+    setPayError(null)
+    try {
+      const updated = await confirmUpiPayment({ paymentId: payment.id, upiReference: upiRef })
+      setPayment(updated)
+      if (updated.status === 'completed') {
+        const r = await generateReceipt({ payment: updated, ride, driverName: driverInfo.name })
+        setReceipt(r)
+      }
+    } catch (err) {
+      setPayError(err.message)
+    } finally {
+      setPaying(false)
+    }
+  }
+
+  async function handleUpiFailed() {
+    if (!payment) return
+    await failUpiPayment(payment.id)
+    setPayment(p => ({ ...p, status: 'failed' }))
+  }
+
+  function handleRetryUpi() {
+    setPayment(null)
+    setUpiRef('')
+    setPayError(null)
+    handlePayUpi()
+  }
+
+  async function handleConfirmCash() {
+    if (!ride || !user) return
+    setPaying(true)
+    setPayError(null)
+    try {
+      const p = await payCash({ rideId: ride.id, riderId: user.id, driverId: ride.driver_id, amount: fare })
+      setPayment(p)
+      const r = await generateReceipt({ payment: p, ride, driverName: driverInfo.name })
+      setReceipt(r)
+    } catch (err) {
+      setPayError(err.message)
+    } finally {
+      setPaying(false)
+    }
+  }
+
+  function handleDownloadReceipt() {
+    if (receipt) window.open(receipt.receipt_url, '_blank')
   }
 
   async function handleSubmit() {
     if (submitting) return
     setSubmitting(true)
-    if (rideId) {
-      await supabase.from('rides').update({ status: 'completed', final_fare: fare }).eq('id', rideId)
+    if (rideId && user && stars > 0) {
+      const review = [comment.trim(), badges.length ? `Tags: ${badges.join(', ')}` : ''].filter(Boolean).join(' — ')
+      const { error } = await supabase.from('ride_ratings').insert({
+        ride_id: rideId,
+        rider_id: user.id,
+        driver_id: ride?.driver_id ?? null,
+        rating: stars,
+        review: review || null,
+      })
+      if (error) console.error('Failed to save rating:', error.message)
     }
     navigate('/rider/home', { replace: true })
   }
+
+  const isPaid = payment?.status === 'completed'
 
   return (
     <div style={{ minHeight: '100dvh', background: 'var(--color-background)', fontFamily: 'var(--font-sans)', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative', overflow: 'hidden' }}>
@@ -67,37 +209,123 @@ export default function RideCompletePage() {
         <section style={{ background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(12px)', border: '1px solid #F1F5F9', borderRadius: 16, padding: 24, textAlign: 'center', position: 'relative', overflow: 'hidden', boxShadow: '0 4px 20px rgba(26,43,60,0.06)' }}>
           <div style={{ position: 'absolute', top: -40, right: -40, width: 120, height: 120, borderRadius: '50%', background: 'rgba(46,204,113,0.15)', filter: 'blur(30px)' }} />
           <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.1em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 6 }}>Total Fare</p>
-          <h2 style={{ fontSize: 44, fontWeight: 700, color: 'var(--color-on-surface)', letterSpacing: '-0.02em', marginBottom: 16 }}>₹{fare.toFixed ? fare.toFixed(2) : fare}</h2>
+          <h2 style={{ fontSize: 44, fontWeight: 700, color: 'var(--color-on-surface)', letterSpacing: '-0.02em', marginBottom: 16 }}>₹{Number(fare).toFixed(2)}</h2>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, paddingTop: 16, borderTop: '1px solid rgba(187,203,187,0.3)' }}>
             <div>
               <p style={{ fontSize: 12, color: 'var(--color-secondary)' }}>Distance</p>
-              <p style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-primary)' }}>12.4 km</p>
+              <p style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-primary)' }}>{ride?.distance_km ? `${ride.distance_km} km` : '—'}</p>
             </div>
             <div>
               <p style={{ fontSize: 12, color: 'var(--color-secondary)' }}>Duration</p>
-              <p style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-primary)' }}>34 mins</p>
+              <p style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-primary)' }}>{ride?.duration_minutes ? `${ride.duration_minutes} mins` : '—'}</p>
             </div>
           </div>
         </section>
 
         {/* Payment */}
         <section className="flex flex-col gap-3">
-          <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-on-surface-variant)', letterSpacing: '0.03em' }}>Payment Methods</p>
-          {[
-            { label: 'Pay via UPI', icon: 'account_balance_wallet', dark: true },
-            { label: 'Pay Cash',    icon: 'payments',               dark: false },
-          ].map(({ label, icon, dark }) => (
-            <button key={label} style={{ width: '100%', minHeight: 52, background: dark ? 'var(--color-on-surface)' : 'var(--color-surface-container)', color: dark ? 'white' : 'var(--color-on-surface)', border: 'none', borderRadius: 12, padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>
-              <div className="flex items-center gap-3">
-                <span className="material-symbols-outlined">{icon}</span>
-                {label}
-              </div>
-              <span className="material-symbols-outlined">chevron_right</span>
-            </button>
-          ))}
-          <button style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, background: 'none', border: 'none', color: 'var(--color-primary)', fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '4px 0' }}>
+          <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-on-surface-variant)', letterSpacing: '0.03em' }}>Payment</p>
+
+          {payError && (
+            <p style={{ fontSize: 13, color: 'var(--color-error)', background: 'var(--color-error-container)', borderRadius: 10, padding: '8px 12px' }}>{payError}</p>
+          )}
+
+          {!payment && (
+            <>
+              <button onClick={handlePayUpi} disabled={paying}
+                style={{ width: '100%', minHeight: 52, background: 'var(--color-on-surface)', color: 'white', border: 'none', borderRadius: 12, padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 15, fontWeight: 500, cursor: paying ? 'not-allowed' : 'pointer', opacity: paying ? 0.7 : 1 }}>
+                <div className="flex items-center gap-3">
+                  <span className="material-symbols-outlined">account_balance_wallet</span>
+                  Pay via UPI
+                </div>
+                <span className="material-symbols-outlined">chevron_right</span>
+              </button>
+              <button onClick={() => setPayMethod('cash')} disabled={paying}
+                style={{ width: '100%', minHeight: 52, background: 'var(--color-surface-container)', color: 'var(--color-on-surface)', border: 'none', borderRadius: 12, padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>
+                <div className="flex items-center gap-3">
+                  <span className="material-symbols-outlined">payments</span>
+                  Pay Cash
+                </div>
+                <span className="material-symbols-outlined">chevron_right</span>
+              </button>
+            </>
+          )}
+
+          {/* Cash confirmation step (before a payment row exists) */}
+          {!payment && payMethod === 'cash' && (
+            <div style={{ background: 'var(--color-surface-container-low)', borderRadius: 12, padding: 16 }}>
+              <p style={{ fontSize: 13, color: 'var(--color-on-surface)', marginBottom: 10 }}>
+                Confirm you've handed ₹{Number(fare).toFixed(2)} in cash to {driverInfo.name}.
+              </p>
+              <button onClick={handleConfirmCash} disabled={paying}
+                style={{ width: '100%', height: 44, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: paying ? 'not-allowed' : 'pointer', opacity: paying ? 0.7 : 1 }}>
+                {paying ? 'Confirming…' : `Confirm ₹${Number(fare).toFixed(2)} Cash Received`}
+              </button>
+            </div>
+          )}
+
+          {/* UPI pending confirmation */}
+          {payment?.status === 'pending' && (
+            <div style={{ background: 'var(--color-surface-container-low)', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <p style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>
+                We opened your UPI app for ₹{Number(fare).toFixed(2)}. Once it goes through, enter the transaction reference below to confirm.
+              </p>
+              <input
+                type="text"
+                value={upiRef}
+                onChange={e => setUpiRef(e.target.value)}
+                placeholder="UPI transaction reference"
+                style={{ height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14 }}
+              />
+              <button onClick={handleConfirmUpi} disabled={paying || !upiRef.trim()}
+                style={{ width: '100%', height: 44, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: paying || !upiRef.trim() ? 'not-allowed' : 'pointer', opacity: paying || !upiRef.trim() ? 0.6 : 1 }}>
+                {paying ? 'Confirming…' : 'Confirm Payment'}
+              </button>
+              <button onClick={handleUpiFailed} disabled={paying}
+                style={{ width: '100%', height: 40, background: 'none', border: '1px solid var(--color-outline-variant)', borderRadius: 10, fontSize: 13, fontWeight: 600, color: 'var(--color-secondary)', cursor: 'pointer' }}>
+                Payment didn't go through
+              </button>
+            </div>
+          )}
+
+          {/* UPI failed → retry */}
+          {payment?.status === 'failed' && (
+            <div style={{ background: 'var(--color-error-container)', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <p style={{ fontSize: 13, color: 'var(--color-error)' }}>That payment didn't complete.</p>
+              <button onClick={handleRetryUpi} disabled={paying}
+                style={{ width: '100%', height: 44, background: 'var(--color-error)', color: 'white', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                Retry Payment
+              </button>
+            </div>
+          )}
+
+          {/* Flagged — duplicate/suspicious reference */}
+          {payment?.status === 'flagged' && (
+            <div style={{ background: 'var(--color-error-container)', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <p style={{ fontSize: 13, color: 'var(--color-error)' }}>
+                That UPI reference has already been used on another payment, so this one's been flagged for review instead of marked paid. Contact support, or try again with the correct reference.
+              </p>
+              <button onClick={handleRetryUpi} disabled={paying}
+                style={{ width: '100%', height: 44, background: 'var(--color-on-surface)', color: 'white', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                Try Again
+              </button>
+            </div>
+          )}
+
+          {/* Paid */}
+          {isPaid && (
+            <div style={{ background: 'rgba(46,204,113,0.1)', border: '1px solid rgba(46,204,113,0.3)', borderRadius: 12, padding: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)' }}>check_circle</span>
+              <p style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>
+                Paid via {payment.method.toUpperCase()} · ₹{Number(payment.amount).toFixed(2)}
+              </p>
+            </div>
+          )}
+
+          <button onClick={handleDownloadReceipt} disabled={!receipt}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, background: 'none', border: 'none', color: receipt ? 'var(--color-primary)' : 'var(--color-outline-variant)', fontSize: 13, fontWeight: 600, cursor: receipt ? 'pointer' : 'not-allowed', padding: '4px 0' }}>
             <span className="material-symbols-outlined" style={{ fontSize: 18 }}>download</span>
-            Download Receipt
+            {receipt ? 'Download Receipt' : 'Receipt available after payment'}
           </button>
         </section>
 
@@ -106,7 +334,7 @@ export default function RideCompletePage() {
           <div className="flex items-center gap-3 mb-4">
             <div style={{ position: 'relative' }}>
               <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 22, border: '2px solid var(--color-primary-container)' }}>
-                {driver.avatar}
+                {driverInfo.avatar}
               </div>
               <div style={{ position: 'absolute', bottom: -2, right: -2, width: 22, height: 22, background: 'var(--color-primary)', borderRadius: '50%', border: '2px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <span className="material-symbols-outlined" style={{ fontSize: 12, color: 'white' }}>check</span>
@@ -114,7 +342,7 @@ export default function RideCompletePage() {
             </div>
             <div>
               <h3 style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-on-surface)' }}>Rate your Driver</h3>
-              <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>{driver.name} is an EV Specialist</p>
+              <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>{driverInfo.name} is an EV Specialist</p>
             </div>
           </div>
 

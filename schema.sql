@@ -313,3 +313,25 @@ create policy "dev_all_notifications" on public.notifications for all using (tru
 -- ============================================================
 
 alter publication supabase_realtime add table public.rides;
+
+-- ============================================================
+-- STORAGE — receipts bucket
+-- The `receipts` bucket is created (public) via the Storage API,
+-- but storage.objects still needs an explicit policy before any
+-- client (anon/authenticated) can upload into it.
+-- ============================================================
+
+create policy "dev_all_receipts_objects"
+  on storage.objects for all
+  using (bucket_id = 'receipts')
+  with check (bucket_id = 'receipts');
+
+-- ============================================================
+-- PAYMENTS TASK — ride_ratings and receipts tables came out of
+-- schema.sql with RLS enabled (this project's default for new
+-- tables) but were never given a policy, so every insert was
+-- silently rejected. Match the existing open dev-policy pattern.
+-- ============================================================
+
+create policy "dev_all_ride_ratings" on public.ride_ratings for all using (true);
+create policy "dev_all_receipts" on public.receipts for all using (true);

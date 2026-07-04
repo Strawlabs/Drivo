@@ -573,16 +573,24 @@ export default function DriverHomePage() {
 
   async function handleStartRide() {
     if (!activeRide) return
-    await supabase.from('rides').update({ status: 'active', started_at: new Date().toISOString() }).eq('id', activeRide.id)
-    setActiveRide(r => ({ ...r, status: 'active' }))
+    const startedAt = new Date().toISOString()
+    await supabase.from('rides').update({ status: 'active', started_at: startedAt }).eq('id', activeRide.id)
+    setActiveRide(r => ({ ...r, status: 'active', started_at: startedAt }))
   }
 
   async function handleCompleteRide() {
     if (!activeRide) return
+    const completedAt = new Date()
+    const startedAt = activeRide.started_at ? new Date(activeRide.started_at) : completedAt
+    const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000))
+    // No live GPS tracking yet — approximate distance from elapsed time at typical city driving speed.
+    const distanceKm = Math.round((durationMinutes / 60) * 20 * 10) / 10
     await supabase.from('rides').update({
       status: 'completed',
-      completed_at: new Date().toISOString(),
+      completed_at: completedAt.toISOString(),
       final_fare: activeRide.estimated_fare,
+      duration_minutes: durationMinutes,
+      distance_km: distanceKm,
     }).eq('id', activeRide.id)
     setActiveRide(null)
   }
