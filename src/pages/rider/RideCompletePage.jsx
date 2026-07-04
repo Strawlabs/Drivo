@@ -219,18 +219,6 @@ export default function RideCompletePage() {
   return (
     <div style={{ minHeight: '100dvh', background: 'var(--color-background)', fontFamily: 'var(--font-sans)', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative', overflow: 'hidden' }}>
 
-      {/* Floating particles */}
-      {Array.from({ length: 20 }).map((_, i) => (
-        <div key={i} style={{
-          position: 'fixed', borderRadius: '50%', opacity: 0.15, pointerEvents: 'none',
-          background: i % 2 === 0 ? '#2ecc71' : '#006d37',
-          width: Math.random() * 20 + 6, height: Math.random() * 20 + 6,
-          left: `${(i * 5.3) % 100}vw`, top: `${(i * 7.1) % 100}vh`,
-          animation: `float ${3 + (i % 4)}s ease-in-out infinite`,
-          animationDelay: `${(i * 0.3) % 2}s`,
-        }} />
-      ))}
-
       {/* Header */}
       <header className="w-full flex justify-between items-center px-5 py-6" style={{ maxWidth: 480 }}>
         <div className="flex items-center gap-3">
@@ -432,13 +420,6 @@ export default function RideCompletePage() {
           {submitting ? 'Submitting…' : 'Submit Feedback & Done'}
         </button>
       </main>
-
-      <style>{`
-        @keyframes float {
-          0%,100% { transform:translateY(0); }
-          50% { transform:translateY(-12px); }
-        }
-      `}</style>
     </div>
   )
 }

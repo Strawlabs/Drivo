@@ -46,7 +46,7 @@ function StarIcon() {
 }
 
 // ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle }) {
+function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount }) {
   return (
     <main className="mx-auto px-5 pb-32" style={{ maxWidth: 480, paddingTop: 24 }}>
       {/* Status Hero */}
@@ -74,10 +74,11 @@ function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle 
       <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 32 }}>
         <div style={{ gridColumn: 'span 2', background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', position: 'relative', overflow: 'hidden' }}>
           <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Today's Earnings</p>
-          <h2 style={{ fontSize: 40, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--color-primary)', lineHeight: '48px' }}>₹184.20</h2>
+          <h2 style={{ fontSize: 40, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--color-primary)', lineHeight: '48px' }}>₹{todayEarnings.toFixed(2)}</h2>
           <div className="flex items-center gap-1" style={{ marginTop: 8 }}>
-            <span style={{ color: 'var(--color-primary)', fontSize: 14 }}>↑</span>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>+12% from yesterday</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-secondary)', letterSpacing: '0.05em' }}>
+              {todayTripsCount} {todayTripsCount === 1 ? 'ride' : 'rides'} paid today
+            </span>
           </div>
           <div style={{ position: 'absolute', right: -32, bottom: -32, width: 128, height: 128, background: 'rgba(0,109,55,0.05)', borderRadius: '50%', filter: 'blur(24px)' }} />
         </div>
@@ -508,6 +509,8 @@ export default function DriverHomePage() {
   const [driverProfileId, setDriverProfileId] = useState(null)
   const [incomingRide, setIncomingRide] = useState(null)
   const [activeRide, setActiveRide] = useState(null)
+  const [todayEarnings, setTodayEarnings] = useState(0)
+  const [todayTripsCount, setTodayTripsCount] = useState(0)
 
   const [displayName, setDisplayName] = useState('Driver')
   const hour = new Date().getHours()
@@ -545,6 +548,33 @@ export default function DriverHomePage() {
       .subscribe()
     return () => supabase.removeChannel(channel)
   }, [driverProfileId, isOnline])
+
+  // Today's earnings — completed payments only, refreshed live as riders pay
+  useEffect(() => {
+    if (!driverProfileId) return
+
+    async function loadEarnings() {
+      const startOfDay = new Date()
+      startOfDay.setHours(0, 0, 0, 0)
+      const { data } = await supabase
+        .from('payments')
+        .select('amount')
+        .eq('driver_id', driverProfileId)
+        .eq('status', 'completed')
+        .gte('paid_at', startOfDay.toISOString())
+      const rows = data ?? []
+      setTodayEarnings(rows.reduce((sum, r) => sum + Number(r.amount), 0))
+      setTodayTripsCount(rows.length)
+    }
+
+    loadEarnings()
+
+    const channel = supabase
+      .channel('driver-earnings-' + driverProfileId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `driver_id=eq.${driverProfileId}` }, loadEarnings)
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [driverProfileId])
 
   async function handleAcceptRide() {
     if (!incomingRide || !driverProfileId) return
@@ -720,7 +750,7 @@ export default function DriverHomePage() {
 
       {/* Tab Content */}
       <div style={{ paddingBottom: 80 }}>
-        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} />}
+        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} />}
         {activeNav === 'discovery' && <DiscoveryTab />}
         {activeNav === 'rides'     && <RidesTab />}
         {activeNav === 'family'    && <FamilyTab />}

@@ -313,6 +313,7 @@ create policy "dev_all_notifications" on public.notifications for all using (tru
 -- ============================================================
 
 alter publication supabase_realtime add table public.rides;
+alter publication supabase_realtime add table public.payments;
 
 -- ============================================================
 -- STORAGE — receipts bucket
