@@ -5,6 +5,7 @@ import { useAuth } from '@/hooks/useAuth.jsx'
 import { buildUpiLink, initiateUpiPayment, confirmUpiPayment, failUpiPayment, payCash, generateReceipt } from '@/lib/payments'
 
 const BADGES = ['Clean Car', 'Expert Driving', 'Great Chat', 'On Time', 'Safe Driver']
+const UPI_TIMEOUT_SECONDS = 120
 
 export default function RideCompletePage() {
   const navigate = useNavigate()
@@ -28,7 +29,46 @@ export default function RideCompletePage() {
   const [comment, setComment]   = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  const [secondsLeft, setSecondsLeft] = useState(null)
+  const [timedOut, setTimedOut] = useState(false)
+
   const fare = ride?.final_fare ?? location.state?.fare ?? 284
+
+  // UPI payments have no gateway callback for MVP — auto-fail a pending
+  // payment if the rider never confirms within the timeout window, so it
+  // doesn't sit at 'pending' forever. Timed from the payment's created_at
+  // (not mount time) so this also recovers correctly after a page reload.
+  useEffect(() => {
+    if (payment?.status !== 'pending') return
+    const createdAt = new Date(payment.created_at).getTime()
+    let interval
+
+    function tick() {
+      const remaining = UPI_TIMEOUT_SECONDS - Math.floor((Date.now() - createdAt) / 1000)
+      if (remaining <= 0) {
+        clearInterval(interval)
+        setSecondsLeft(0)
+        handleUpiTimeout()
+      } else {
+        setSecondsLeft(remaining)
+      }
+    }
+
+    tick()
+    interval = setInterval(tick, 1000)
+    return () => clearInterval(interval)
+  }, [payment?.id, payment?.status])
+
+  async function handleUpiTimeout() {
+    if (!payment) return
+    setTimedOut(true)
+    try {
+      await failUpiPayment(payment.id)
+    } catch {
+      // best-effort — UI still shows the timed-out state either way
+    }
+    setPayment(p => (p && p.status === 'pending' ? { ...p, status: 'failed' } : p))
+  }
 
   useEffect(() => {
     if (!rideId) return
@@ -81,6 +121,7 @@ export default function RideCompletePage() {
   async function handlePayUpi() {
     if (!ride || !user) return
     setPayError(null)
+    setTimedOut(false)
     if (!driverInfo.upiId) {
       setPayError("This driver hasn't set up a UPI id yet — pay cash instead.")
       return
@@ -124,6 +165,7 @@ export default function RideCompletePage() {
 
   async function handleUpiFailed() {
     if (!payment) return
+    setTimedOut(false)
     await failUpiPayment(payment.id)
     setPayment(p => ({ ...p, status: 'failed' }))
   }
@@ -270,6 +312,11 @@ export default function RideCompletePage() {
               <p style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>
                 We opened your UPI app for ₹{Number(fare).toFixed(2)}. Once it goes through, enter the transaction reference below to confirm.
               </p>
+              {secondsLeft !== null && (
+                <p style={{ fontSize: 12, color: 'var(--color-secondary)' }}>
+                  Times out in {String(Math.floor(secondsLeft / 60)).padStart(1, '0')}:{String(secondsLeft % 60).padStart(2, '0')} if not confirmed.
+                </p>
+              )}
               <input
                 type="text"
                 value={upiRef}
@@ -291,7 +338,9 @@ export default function RideCompletePage() {
           {/* UPI failed → retry */}
           {payment?.status === 'failed' && (
             <div style={{ background: 'var(--color-error-container)', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <p style={{ fontSize: 13, color: 'var(--color-error)' }}>That payment didn't complete.</p>
+              <p style={{ fontSize: 13, color: 'var(--color-error)' }}>
+                {timedOut ? 'This payment timed out waiting for confirmation.' : "That payment didn't complete."}
+              </p>
               <button onClick={handleRetryUpi} disabled={paying}
                 style={{ width: '100%', height: 44, background: 'var(--color-error)', color: 'white', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
                 Retry Payment
