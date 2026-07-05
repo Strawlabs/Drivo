@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchAvailableDrivers } from '@/lib/drivers'
+import { fetchPreferredDriversForRider, removePreferredDriver, fetchSubscriptionTier, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
 
 const PAST_TRIPS = [
   { id: 1, from: 'Koramangala 5th Block', to: 'MG Road Metro Station', date: 'Today, 9:14 AM',      fare: '₹184', distance: '6.2 km', duration: '18 mins', driver: 'Ramesh K.', rating: 5, status: 'completed' },
@@ -477,7 +478,7 @@ function DriversTab({ onBookDriver }) {
 }
 
 // ── TAB: Profile ────────────────────────────────────────────────
-function ProfileTab({ firstName, email, onSignOut }) {
+function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers }) {
   return (
     <div className="px-5 pt-6 pb-8">
       {/* Profile hero */}
@@ -515,7 +516,7 @@ function ProfileTab({ firstName, email, onSignOut }) {
         {
           title: 'Preferences',
           items: [
-            { icon: '🚗', label: 'Preferred Drivers' },
+            { icon: '🚗', label: 'Preferred Drivers', onClick: onOpenPreferredDrivers },
             { icon: '🌿', label: 'Eco Impact Report' },
             { icon: '🔔', label: 'Notifications' },
           ]
@@ -532,11 +533,12 @@ function ProfileTab({ firstName, email, onSignOut }) {
         <div key={title} style={{ marginBottom: 20 }}>
           <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{title}</p>
           <div style={{ background: 'white', borderRadius: 16, overflow: 'hidden', boxShadow: '0 1px 4px rgba(26,43,60,0.06)' }}>
-            {items.map(({ icon, label }, i) => (
+            {items.map(({ icon, label, onClick }, i) => (
               <button
                 key={label}
+                onClick={onClick}
                 className="flex items-center justify-between w-full text-left"
-                style={{ padding: '14px 16px', background: 'none', border: 'none', borderTop: i > 0 ? '1px solid var(--color-outline-variant)' : 'none', cursor: 'pointer' }}
+                style={{ padding: '14px 16px', background: 'none', border: 'none', borderTop: i > 0 ? '1px solid var(--color-outline-variant)' : 'none', cursor: onClick ? 'pointer' : 'default' }}
               >
                 <div className="flex items-center gap-3">
                   <span style={{ fontSize: 18 }}>{icon}</span>
@@ -561,12 +563,120 @@ function ProfileTab({ firstName, email, onSignOut }) {
   )
 }
 
+// ── Preferred Drivers ────────────────────────────────────────────
+function PreferredDriversModal({ userId, onClose, onBookDriver }) {
+  const [loading, setLoading] = useState(true)
+  const [drivers, setDrivers] = useState([])
+  const [tier, setTier] = useState('none')
+  const [removingId, setRemovingId] = useState(null)
+
+  useEffect(() => {
+    async function load() {
+      const [list, t] = await Promise.all([
+        fetchPreferredDriversForRider(userId),
+        fetchSubscriptionTier(userId),
+      ])
+      setDrivers(list)
+      setTier(t)
+      setLoading(false)
+    }
+    load()
+  }, [userId])
+
+  const isEligible = ELIGIBLE_TIERS.includes(tier)
+
+  async function handleRemove(preferredId) {
+    setRemovingId(preferredId)
+    try {
+      await removePreferredDriver(preferredId)
+      setDrivers(prev => prev.filter(d => d.preferredId !== preferredId))
+    } finally {
+      setRemovingId(null)
+    }
+  }
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(11,28,48,0.6)', backdropFilter: 'blur(4px)' }} />
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201, background: 'var(--color-surface)', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 20px 40px', boxShadow: '0 -10px 40px rgba(26,43,60,0.2)', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ width: 40, height: 4, background: 'var(--color-outline-variant)', borderRadius: 2, margin: '0 auto 20px' }} />
+        <div className="flex items-center justify-between mb-4">
+          <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)' }}>🚗 Preferred Drivers</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-secondary)' }}>✕</button>
+        </div>
+
+        {!isEligible && (
+          <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 16 }}>
+            <p style={{ fontSize: 13, color: '#B45309' }}>
+              {drivers.length > 0
+                ? "Your Care Plan / Family Plan has expired — upgrade to request these drivers directly again."
+                : "Saving and requesting preferred drivers is a Care Plan / Family Plan benefit."}
+            </p>
+          </div>
+        )}
+
+        {loading && <p style={{ fontSize: 14, color: 'var(--color-secondary)', textAlign: 'center', padding: '20px 0' }}>Loading…</p>}
+
+        {!loading && drivers.length === 0 && (
+          <p style={{ fontSize: 14, color: 'var(--color-secondary)', textAlign: 'center', padding: '20px 0' }}>
+            No preferred drivers yet — save one from the ride-completion screen after your next ride.
+          </p>
+        )}
+
+        <div className="flex flex-col gap-3">
+          {drivers.map(d => (
+            <div key={d.preferredId} style={{ background: 'var(--color-surface-container-low)', borderRadius: 14, padding: 14 }}>
+              <div className="flex items-center gap-3 mb-2">
+                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                  {d.avatar}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)' }}>{d.name}</p>
+                  <div className="flex items-center gap-1.5">
+                    <span style={{ fontSize: 12, color: '#F59E0B' }}>★</span>
+                    <span style={{ fontSize: 12, color: 'var(--color-on-surface)' }}>{d.rating}</span>
+                    <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {d.type}</span>
+                  </div>
+                </div>
+                <button onClick={() => handleRemove(d.preferredId)} disabled={removingId === d.preferredId}
+                  style={{ background: 'none', border: 'none', color: 'var(--color-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  {removingId === d.preferredId ? '…' : 'Remove'}
+                </button>
+              </div>
+
+              <p style={{ fontSize: 12, color: 'var(--color-secondary)', marginBottom: 8 }}>
+                Last ride: {d.lastRideAt ? new Date(d.lastRideAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No completed rides yet'}
+              </p>
+
+              {d.status === 'pending' && (
+                <p style={{ fontSize: 12, color: 'var(--color-secondary)', fontStyle: 'italic' }}>Waiting for driver approval</p>
+              )}
+              {d.status === 'blocked_by_driver' && (
+                <p style={{ fontSize: 12, color: 'var(--color-error)' }}>This driver isn't accepting your requests right now</p>
+              )}
+              {d.status === 'active' && (
+                <button
+                  onClick={() => onBookDriver(d)}
+                  disabled={!d.isOnline || !isEligible}
+                  style={{ width: '100%', height: 38, background: (d.isOnline && isEligible) ? 'var(--color-primary)' : 'var(--color-surface-container)', color: (d.isOnline && isEligible) ? 'white' : 'var(--color-secondary)', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: (d.isOnline && isEligible) ? 'pointer' : 'default' }}>
+                  {!isEligible ? 'Upgrade to request' : d.isOnline ? 'Request Ride' : 'Offline right now'}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── Main Page ───────────────────────────────────────────────────
 export default function RiderHomePage() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [activeNav, setActiveNav] = useState('home')
   const [firstName, setFirstName] = useState('Rider')
+  const [showPreferredDrivers, setShowPreferredDrivers] = useState(false)
 
   useEffect(() => {
     if (!user) return
@@ -608,8 +718,16 @@ export default function RiderHomePage() {
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} />}
         {activeNav === 'trips'   && <TripsTab />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
-        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} />}
+        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} />}
       </main>
+
+      {showPreferredDrivers && user && (
+        <PreferredDriversModal
+          userId={user.id}
+          onClose={() => setShowPreferredDrivers(false)}
+          onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })}
+        />
+      )}
 
       {/* Bottom Nav */}
       <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-4 pt-2" style={{ background: 'var(--color-surface)', boxShadow: '0px -4px 20px rgba(26,43,60,0.05)', borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>

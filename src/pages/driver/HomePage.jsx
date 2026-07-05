@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchDriverEarnings, summarizeForPeriod, bucketTrend, buildEarningsReportCsv, PERIOD_DAYS } from '@/lib/earnings'
 import { HOME_ZONES, validateGoHomeInput, activateGoHome, deactivateGoHome, fetchActiveGoHomeSession, matchGoHomeRide, toLocalDatetimeInputValue } from '@/lib/goHome'
+import { fetchPreferredRidersForDriver, approvePreferredRider, declinePreferredRider, blockPreferredRider } from '@/lib/preferredDrivers'
 
 // ── Mock data ──────────────────────────────────────────────────
 const DISCOVERY_DRIVERS = [
@@ -41,7 +42,7 @@ function StarIcon() {
 }
 
 // ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome }) {
+function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome, onOpenPreferredRiders }) {
   return (
     <main className="mx-auto px-5 pb-32" style={{ maxWidth: 480, paddingTop: 24 }}>
       {/* Status Hero */}
@@ -80,12 +81,12 @@ function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle,
         {[
           { icon: '🚗', label: 'Trips',            value: String(todayTripsCount) },
           { icon: '⭐', label: 'Rating',            value: Number(driverRating).toFixed(2) },
-          { icon: '💚', label: 'Preferred Riders',  value: String(preferredRidersCount) },
+          { icon: '💚', label: 'Preferred Riders',  value: String(preferredRidersCount), onClick: onOpenPreferredRiders },
           { icon: '🎖️', label: 'Subscription',      value: subscription?.subscription_plans?.name
               ? subscription.subscription_plans.name.charAt(0).toUpperCase() + subscription.subscription_plans.name.slice(1)
               : 'None' },
-        ].map(({ icon, label, value }) => (
-          <div key={label} style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+        ].map(({ icon, label, value, onClick }) => (
+          <div key={label} onClick={onClick} style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', cursor: onClick ? 'pointer' : 'default' }}>
             <span style={{ fontSize: 22, marginBottom: 4 }}>{icon}</span>
             <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>{label}</p>
             <h3 style={{ fontSize: 24, fontWeight: 600, color: 'var(--color-on-surface)' }}>{value}</h3>
@@ -477,6 +478,84 @@ function FamilyTab() {
   )
 }
 
+// ── Preferred Riders ─────────────────────────────────────────────
+function PreferredRidersModal({ driverProfileId, onClose, onCountChange }) {
+  const [loading, setLoading] = useState(true)
+  const [riders, setRiders] = useState([])
+  const [busyId, setBusyId] = useState(null)
+
+  useEffect(() => {
+    fetchPreferredRidersForDriver(driverProfileId).then(list => { setRiders(list); setLoading(false) })
+  }, [driverProfileId])
+
+  const pending = riders.filter(r => r.status === 'pending')
+  const active = riders.filter(r => r.status === 'active')
+
+  async function handle(action, id) {
+    setBusyId(id)
+    try {
+      await action(id)
+      const updated = await fetchPreferredRidersForDriver(driverProfileId)
+      setRiders(updated)
+      onCountChange(updated.filter(r => r.status === 'active').length)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(11,28,48,0.6)', backdropFilter: 'blur(4px)' }} />
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201, background: 'var(--color-surface)', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 20px 40px', boxShadow: '0 -10px 40px rgba(26,43,60,0.2)', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ width: 40, height: 4, background: 'var(--color-outline-variant)', borderRadius: 2, margin: '0 auto 20px' }} />
+        <div className="flex items-center justify-between mb-4">
+          <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)' }}>💚 Preferred Riders</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-secondary)' }}>✕</button>
+        </div>
+
+        {loading && <p style={{ fontSize: 14, color: 'var(--color-secondary)', textAlign: 'center', padding: '20px 0' }}>Loading…</p>}
+
+        {!loading && pending.length > 0 && (
+          <div className="flex flex-col gap-2 mb-5">
+            <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--color-secondary)', textTransform: 'uppercase' }}>Pending Requests</p>
+            {pending.map(r => (
+              <div key={r.id} style={{ background: 'var(--color-surface-container-low)', borderRadius: 12, padding: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)' }}>{r.riderName}</p>
+                <div className="flex gap-2">
+                  <button onClick={() => handle(declinePreferredRider, r.id)} disabled={busyId === r.id}
+                    style={{ height: 34, padding: '0 12px', border: '1px solid var(--color-outline-variant)', background: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
+                    Decline
+                  </button>
+                  <button onClick={() => handle(approvePreferredRider, r.id)} disabled={busyId === r.id}
+                    style={{ height: 34, padding: '0 12px', border: 'none', background: 'var(--color-primary)', borderRadius: 8, fontSize: 12, fontWeight: 700, color: 'white', cursor: 'pointer' }}>
+                    Approve
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--color-secondary)', textTransform: 'uppercase' }}>Active</p>
+          {active.length === 0 && !loading && (
+            <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No preferred riders yet.</p>
+          )}
+          {active.map(r => (
+            <div key={r.id} style={{ background: 'var(--color-surface-container-low)', borderRadius: 12, padding: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)' }}>{r.riderName}</p>
+              <button onClick={() => handle(blockPreferredRider, r.id)} disabled={busyId === r.id}
+                style={{ height: 34, padding: '0 12px', border: '1px solid var(--color-error)', background: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, color: 'var(--color-error)', cursor: 'pointer' }}>
+                {busyId === r.id ? '…' : 'Block'}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── Go Home Mode ─────────────────────────────────────────────────
 function GoHomeModal({ session, driverProfileId, onClose, onActivated, onDeactivated }) {
   const [zoneName, setZoneName] = useState(session?.preferred_route?.zone_name ?? HOME_ZONES[0].name)
@@ -677,6 +756,7 @@ export default function DriverHomePage() {
   const [goHomeSession, setGoHomeSession] = useState(null)
   const [showGoHomeModal, setShowGoHomeModal] = useState(false)
   const [goHomeMatch, setGoHomeMatch] = useState(null)
+  const [showPreferredRiders, setShowPreferredRiders] = useState(false)
 
   const [displayName, setDisplayName] = useState('Driver')
   const hour = new Date().getHours()
@@ -951,6 +1031,15 @@ export default function DriverHomePage() {
         />
       )}
 
+      {/* Preferred Riders */}
+      {showPreferredRiders && (
+        <PreferredRidersModal
+          driverProfileId={driverProfileId}
+          onClose={() => setShowPreferredRiders(false)}
+          onCountChange={setPreferredRidersCount}
+        />
+      )}
+
       {/* Scrim */}
       {drawerOpen && (
         <div onClick={() => setDrawerOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 55, background: 'rgba(11,28,48,0.4)', backdropFilter: 'blur(4px)' }} />
@@ -1000,7 +1089,7 @@ export default function DriverHomePage() {
 
       {/* Tab Content */}
       <div style={{ paddingBottom: 80 }}>
-        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => setShowGoHomeModal(true)} />}
+        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => setShowGoHomeModal(true)} onOpenPreferredRiders={() => setShowPreferredRiders(true)} />}
         {activeNav === 'discovery' && <DiscoveryTab />}
         {activeNav === 'rides'     && <RidesTab driverProfileId={driverProfileId} />}
         {activeNav === 'family'    && <FamilyTab />}

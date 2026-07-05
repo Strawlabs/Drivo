@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { buildUpiLink, initiateUpiPayment, confirmUpiPayment, failUpiPayment, payCash, generateReceipt } from '@/lib/payments'
 import { recalculateDriverRating } from '@/lib/drivers'
+import { fetchSubscriptionTier, ELIGIBLE_TIERS, savePreferredDriver } from '@/lib/preferredDrivers'
 
 const BADGES = ['Clean Car', 'Expert Driving', 'Great Chat', 'On Time', 'Safe Driver']
 const UPI_TIMEOUT_SECONDS = 120
@@ -33,6 +34,11 @@ export default function RideCompletePage() {
 
   const [secondsLeft, setSecondsLeft] = useState(null)
   const [timedOut, setTimedOut] = useState(false)
+
+  const [subscriptionTier, setSubscriptionTier] = useState('none')
+  const [savedDriverStatus, setSavedDriverStatus] = useState(null) // null | 'pending' | 'active' | 'blocked_by_driver'
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
 
   const fare = ride?.final_fare ?? location.state?.fare ?? 284
 
@@ -119,9 +125,39 @@ export default function RideCompletePage() {
       const { data: ratingRow } = await supabase
         .from('ride_ratings').select('*').eq('ride_id', rideId).maybeSingle()
       if (ratingRow) setExistingRating(ratingRow)
+
+      if (user) {
+        const tier = await fetchSubscriptionTier(user.id)
+        setSubscriptionTier(tier)
+      }
+      if (rideRow.driver_id && user) {
+        const { data: preferredRow } = await supabase
+          .from('preferred_drivers')
+          .select('status')
+          .eq('rider_id', user.id)
+          .eq('driver_id', rideRow.driver_id)
+          .maybeSingle()
+        if (preferredRow && preferredRow.status !== 'removed') setSavedDriverStatus(preferredRow.status)
+      }
     }
     load()
   }, [rideId])
+
+  const isEligibleForPreferredDriver = ELIGIBLE_TIERS.includes(subscriptionTier)
+
+  async function handleSaveDriver() {
+    if (!ride?.driver_id || !user) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const row = await savePreferredDriver({ riderId: user.id, driverId: ride.driver_id })
+      setSavedDriverStatus(row.status)
+    } catch (err) {
+      setSaveError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   function toggleBadge(b) {
     setBadges(prev => prev.includes(b) ? prev.filter(x => x !== b) : [...prev, b])
@@ -439,6 +475,45 @@ export default function RideCompletePage() {
             </>
           )}
         </section>
+
+        {/* Save Driver */}
+        {ride?.driver_id && (
+          <section style={{ background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(12px)', border: '1px solid #F1F5F9', borderRadius: 16, padding: 16 }}>
+            {saveError && (
+              <p style={{ fontSize: 13, color: 'var(--color-error)', marginBottom: 10 }}>{saveError}</p>
+            )}
+            {savedDriverStatus === 'active' && (
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)' }}>favorite</span>
+                <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driverInfo.name} is a preferred driver</p>
+              </div>
+            )}
+            {savedDriverStatus === 'pending' && (
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined" style={{ color: 'var(--color-secondary)' }}>hourglass_top</span>
+                <p style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>Waiting for {driverInfo.name} to approve your preferred-driver request.</p>
+              </div>
+            )}
+            {savedDriverStatus === 'blocked_by_driver' && (
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined" style={{ color: 'var(--color-error)' }}>block</span>
+                <p style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{driverInfo.name} isn't accepting preferred-driver requests right now.</p>
+              </div>
+            )}
+            {!savedDriverStatus && isEligibleForPreferredDriver && (
+              <button onClick={handleSaveDriver} disabled={saving}
+                style={{ width: '100%', height: 44, background: 'var(--color-primary-container)', color: 'var(--color-on-primary-container)', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>favorite</span>
+                {saving ? 'Saving…' : `Save ${driverInfo.name} as Preferred Driver`}
+              </button>
+            )}
+            {!savedDriverStatus && !isEligibleForPreferredDriver && (
+              <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>
+                Saving preferred drivers is a Care Plan / Family Plan benefit — upgrade your subscription to save {driverInfo.name} for future rides.
+              </p>
+            )}
+          </section>
+        )}
 
         {!existingRating && (
           <>

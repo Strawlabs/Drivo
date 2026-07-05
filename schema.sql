@@ -359,3 +359,66 @@ create index if not exists payments_driver_status_idx on public.payments (driver
 -- ============================================================
 
 create policy "dev_all_go_home_sessions" on public.go_home_sessions for all using (true);
+
+-- ============================================================
+-- PREFERRED DRIVERS TASK
+--
+-- There is no rider-subscription table/system in this schema at all
+-- (subscription_plans/driver_subscriptions are driver-side Drivo+
+-- tiers only) — "Rider Subscription Eligibility" is a separate,
+-- not-yet-built dependency. Rather than skip the eligibility gate
+-- required by this task's acceptance criteria, adds a minimal
+-- users.subscription_tier column so "save a preferred driver" can be
+-- genuinely enforced server-side (not just a UI if-statement) ahead
+-- of the real subscription/billing system.
+--
+-- Also widens preferred_drivers.status to include 'pending' so a
+-- driver can actually "approve" a preferred-rider relationship
+-- (previously it went straight to 'active' with no approval step).
+-- ============================================================
+
+alter table public.users
+  add column if not exists subscription_tier text not null default 'none'
+    check (subscription_tier in ('none', 'care', 'family'));
+
+alter table public.preferred_drivers drop constraint if exists preferred_drivers_status_check;
+alter table public.preferred_drivers
+  add constraint preferred_drivers_status_check
+    check (status in ('pending', 'active', 'removed', 'blocked_by_driver'));
+alter table public.preferred_drivers alter column status set default 'pending';
+
+drop policy if exists "dev_all_preferred_drivers" on public.preferred_drivers;
+
+-- Reading isn't the sensitive operation here — both sides need to see
+-- these rows (rider's saved list, driver's preferred-rider list).
+create policy "preferred_drivers_select_all"
+  on public.preferred_drivers for select
+  using (true);
+
+-- The actual eligibility gate the task asks for: a rider can only
+-- create a preferred-driver row for themselves, and only if their
+-- subscription_tier is Care or Family.
+create policy "preferred_drivers_insert_eligible"
+  on public.preferred_drivers for insert
+  with check (
+    auth.uid() = rider_id
+    and exists (
+      select 1 from public.users
+      where id = auth.uid() and subscription_tier in ('care', 'family')
+    )
+  );
+
+-- Either party can update a row that involves them, but a rider can
+-- only move their own row to 'removed' (cancel) — they can't
+-- self-approve straight to 'active', bypassing the driver's approval.
+-- The driver can set any status (approve/decline/block).
+create policy "preferred_drivers_update_own"
+  on public.preferred_drivers for update
+  using (
+    auth.uid() = rider_id
+    or auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+  )
+  with check (
+    (auth.uid() = rider_id and status = 'removed')
+    or auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+  );
