@@ -422,3 +422,77 @@ create policy "preferred_drivers_update_own"
     (auth.uid() = rider_id and status = 'removed')
     or auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
   );
+
+-- ============================================================
+-- FAMILY RIDES TASK
+--
+-- family_accounts / emergency_contacts / scheduled_rides had RLS
+-- disabled entirely (fully open by default) since they were first
+-- created — same recurring gap as every other new table in this
+-- project. Given this task's own acceptance criteria explicitly call
+-- out "unauthorized access ... handled safely," and following the
+-- real-RLS precedent set for preferred_drivers, these get genuine
+-- owner/member-scoped policies rather than a wide-open dev policy.
+--
+-- Scope decision: Family Dashboard is rider-only (see conversation) —
+-- a "family member" must be an existing rider account looked up by
+-- phone, added as 'pending' by the owner, then approved by the member
+-- themselves (mirrors the preferred_drivers pending->approve shape).
+-- ============================================================
+
+alter table public.scheduled_rides add column if not exists cancellation_reason text;
+
+alter table public.family_accounts enable row level security;
+alter table public.emergency_contacts enable row level security;
+alter table public.scheduled_rides enable row level security;
+
+-- Both the owner and the invited member need to see a family_accounts
+-- row — the owner to manage their family list, the member to see and
+-- respond to a pending invite directed at them.
+create policy "family_accounts_select_involved"
+  on public.family_accounts for select
+  using (auth.uid() = primary_user_id or auth.uid() = member_user_id);
+
+-- Only the owner can create the invite, and only naming themselves as
+-- primary_user_id — can't create a row on someone else's behalf.
+create policy "family_accounts_insert_owner"
+  on public.family_accounts for insert
+  with check (auth.uid() = primary_user_id);
+
+-- The owner can remove a member (status -> 'removed'). The invited
+-- member can approve (status -> 'active') or decline/leave
+-- (status -> 'removed'), but can't self-escalate anything else.
+create policy "family_accounts_update_involved"
+  on public.family_accounts for update
+  using (auth.uid() = primary_user_id or auth.uid() = member_user_id)
+  with check (
+    (auth.uid() = primary_user_id and status = 'removed')
+    or (auth.uid() = member_user_id and status in ('active', 'removed'))
+  );
+
+-- Emergency contacts are private to the account that owns the Safety
+-- Net card on their own Family Dashboard — not shared with members.
+create policy "emergency_contacts_owner_only"
+  on public.emergency_contacts for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- A scheduled ride is visible/manageable by whoever requested it. (The
+-- rider it's for is also allowed to see it, covering the case where a
+-- parent schedules a ride for a family member's own account.)
+create policy "scheduled_rides_select_involved"
+  on public.scheduled_rides for select
+  using (auth.uid() = requested_by or auth.uid() = rider_id);
+
+create policy "scheduled_rides_insert_own"
+  on public.scheduled_rides for insert
+  with check (auth.uid() = requested_by);
+
+create policy "scheduled_rides_update_own"
+  on public.scheduled_rides for update
+  using (auth.uid() = requested_by)
+  with check (auth.uid() = requested_by);
+
+create index if not exists family_accounts_primary_idx on public.family_accounts (primary_user_id, status);
+create index if not exists family_accounts_member_idx on public.family_accounts (member_user_id, status);
+create index if not exists scheduled_rides_requested_by_idx on public.scheduled_rides (requested_by, status);

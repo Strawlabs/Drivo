@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchAvailableDrivers } from '@/lib/drivers'
 import { fetchPreferredDriversForRider, removePreferredDriver, fetchSubscriptionTier, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
+import { dispatchDueScheduledRides } from '@/lib/family'
 
 const PAST_TRIPS = [
   { id: 1, from: 'Koramangala 5th Block', to: 'MG Road Metro Station', date: 'Today, 9:14 AM',      fare: '₹184', distance: '6.2 km', duration: '18 mins', driver: 'Ramesh K.', rating: 5, status: 'completed' },
@@ -478,7 +479,7 @@ function DriversTab({ onBookDriver }) {
 }
 
 // ── TAB: Profile ────────────────────────────────────────────────
-function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers }) {
+function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpenFamily }) {
   return (
     <div className="px-5 pt-6 pb-8">
       {/* Profile hero */}
@@ -517,6 +518,7 @@ function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers }) {
           title: 'Preferences',
           items: [
             { icon: '🚗', label: 'Preferred Drivers', onClick: onOpenPreferredDrivers },
+            { icon: '👨‍👩‍👧', label: 'Family', onClick: onOpenFamily },
             { icon: '🌿', label: 'Eco Impact Report' },
             { icon: '🔔', label: 'Notifications' },
           ]
@@ -686,6 +688,22 @@ export default function RiderHomePage() {
       })
   }, [user])
 
+  /*
+    No backend cron exists in this app. While the rider has the app
+    open, periodically check for scheduled_rides whose time has
+    arrived and dispatch them into real rides — matches the pattern
+    already used for Go Home Mode / UPI timeout (client-anchored,
+    survives reload, but only fires while a client is actually open).
+  */
+  useEffect(() => {
+    if (!user) return
+    dispatchDueScheduledRides(user.id).catch(() => {})
+    const interval = setInterval(() => {
+      dispatchDueScheduledRides(user.id).catch(() => {})
+    }, 60000)
+    return () => clearInterval(interval)
+  }, [user])
+
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening'
 
@@ -718,7 +736,7 @@ export default function RiderHomePage() {
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} />}
         {activeNav === 'trips'   && <TripsTab />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
-        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} />}
+        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} />}
       </main>
 
       {showPreferredDrivers && user && (
