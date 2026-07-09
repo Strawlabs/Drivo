@@ -10,6 +10,7 @@ import ScheduledRidesPage from '@/pages/rider/ScheduledRidesPage'
 import FamilyPage from '@/pages/rider/FamilyPage'
 import DriverHomePage from '@/pages/driver/HomePage'
 import DriverVerificationPage from '@/pages/driver/VerificationPage'
+import DriverSubscriptionPage from '@/pages/driver/SubscriptionPage'
 import AdminDashboardPage from '@/pages/admin/DashboardPage'
 
 /* ── Shared loading spinner ───────────────────────────────── */
@@ -109,6 +110,7 @@ function AppRoutes() {
       {/* Driver pages */}
       <Route path="/driver/home"         element={<RoleRoute allowedRole="driver"><DriverHomePage /></RoleRoute>} />
       <Route path="/driver/verification" element={<RoleRoute allowedRole="driver"><DriverVerificationPage /></RoleRoute>} />
+      <Route path="/driver/subscription" element={<RoleRoute allowedRole="driver"><DriverSubscriptionPage /></RoleRoute>} />
 
       {/* Admin pages */}
       <Route path="/admin/dashboard" element={<RoleRoute allowedRole="admin"><AdminDashboardPage /></RoleRoute>} />

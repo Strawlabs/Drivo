@@ -34,6 +34,119 @@ function DocsBadge({ status }) {
   )
 }
 
+function SubscriptionAdminPanel() {
+  const [plans, setPlans] = useState([])
+  const [subs, setSubs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [savingId, setSavingId] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    const [{ data: p }, { data: s }] = await Promise.all([
+      supabase.from('subscription_plans').select('*').order('price', { ascending: true }),
+      supabase.from('driver_subscriptions').select('id, status, subscription_plans(name, price)'),
+    ])
+    setPlans(p ?? [])
+    setSubs(s ?? [])
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function updatePrice(planId, price) {
+    setSavingId(planId)
+    await supabase.from('subscription_plans').update({ price }).eq('id', planId)
+    await load()
+    setSavingId(null)
+  }
+
+  async function toggleActive(plan) {
+    setSavingId(plan.id)
+    await supabase.from('subscription_plans').update({ is_active: !plan.is_active }).eq('id', plan.id)
+    await load()
+    setSavingId(null)
+  }
+
+  const countsByPlan = plans.reduce((acc, plan) => {
+    acc[plan.id] = subs.filter(s => s.subscription_plans?.name === plan.name && ['active', 'grace_period'].includes(s.status)).length
+    return acc
+  }, {})
+  const totalRevenue = subs.reduce((sum, s) => sum + Number(s.subscription_plans?.price ?? 0), 0)
+  const totalSubscribers = subs.filter(s => ['active', 'grace_period'].includes(s.status)).length
+
+  if (loading) {
+    return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
+  }
+
+  return (
+    <>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 28 }}>
+        {[
+          { label: 'Active Subscribers', value: totalSubscribers, icon: 'groups' },
+          { label: 'Total Revenue (all-time)', value: `₹${totalRevenue.toLocaleString('en-IN')}`, icon: 'account_balance_wallet' },
+          { label: 'Plans', value: plans.length, icon: 'loyalty' },
+        ].map(card => (
+          <div key={card.label} style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, padding: 24, boxShadow: '0 4px 20px rgba(26,43,60,0.05)' }}>
+            <div style={{ padding: 10, background: '#d2e4fb', borderRadius: 12, display: 'inline-flex', marginBottom: 12 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 22, color: '#4f6073' }}>{card.icon}</span>
+            </div>
+            <p style={{ fontSize: 13, color: '#4f6073', marginBottom: 4 }}>{card.label}</p>
+            <h3 style={{ fontSize: 28, fontWeight: 600, color: '#0b1c30', margin: 0 }}>{card.value}</h3>
+          </div>
+        ))}
+      </section>
+
+      <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden' }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>Manage Plans</h2>
+          <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3 }}>Edit pricing and enable/disable Basic, Pro, and Elite.</p>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#eff4ff' }}>
+                {['Plan', 'Price', 'Duration', 'Subscribers', 'Status', ''].map(h => (
+                  <th key={h} style={{ padding: '12px 24px', textAlign: h === '' ? 'right' : 'left', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: '#4f6073', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {plans.map(plan => (
+                <tr key={plan.id} style={{ borderTop: '1px solid #e5eeff' }}>
+                  <td style={{ padding: '16px 24px', fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>
+                    {plan.name.charAt(0).toUpperCase() + plan.name.slice(1)}
+                  </td>
+                  <td style={{ padding: '16px 24px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ fontSize: 13, color: '#4f6073' }}>₹</span>
+                      <input type="number" defaultValue={plan.price} disabled={savingId === plan.id}
+                        onBlur={e => { const v = Number(e.target.value); if (v > 0 && v !== plan.price) updatePrice(plan.id, v) }}
+                        style={{ width: 80, height: 32, padding: '0 8px', border: '1px solid #bbcbbb', borderRadius: 6, fontSize: 13 }} />
+                    </div>
+                  </td>
+                  <td style={{ padding: '16px 24px', fontSize: 13, color: '#4f6073' }}>{plan.duration_days} days</td>
+                  <td style={{ padding: '16px 24px', fontSize: 13, color: '#0b1c30' }}>{countsByPlan[plan.id] ?? 0}</td>
+                  <td style={{ padding: '16px 24px' }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: plan.is_active ? '#006d37' : '#ba1a1a', background: plan.is_active ? 'rgba(46,204,113,0.12)' : 'rgba(186,26,26,0.08)', padding: '3px 10px', borderRadius: 6 }}>
+                      {plan.is_active ? 'Active' : 'Disabled'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '16px 24px', textAlign: 'right' }}>
+                    <button onClick={() => toggleActive(plan)} disabled={savingId === plan.id}
+                      style={{ padding: '6px 16px', border: '1px solid #6c7b6d', borderRadius: 8, background: 'none', color: '#3d4a3e', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                      {plan.is_active ? 'Disable' : 'Enable'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  )
+}
+
 const NAV = [
   { icon: 'payments',   label: 'Earnings' },
   { icon: 'home_pin',   label: 'Go Home Mode' },
@@ -179,6 +292,10 @@ export default function AdminDashboardPage() {
           </div>
         </header>
 
+        {activeNav === 'Subscription' ? (
+          <SubscriptionAdminPanel />
+        ) : (
+        <>
         {/* KPI Cards */}
         <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 28 }}>
           {[
@@ -382,6 +499,8 @@ export default function AdminDashboardPage() {
             </table>
           </div>
         </section>
+        </>
+        )}
       </main>
     </div>
   )

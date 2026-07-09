@@ -496,3 +496,115 @@ create policy "scheduled_rides_update_own"
 create index if not exists family_accounts_primary_idx on public.family_accounts (primary_user_id, status);
 create index if not exists family_accounts_member_idx on public.family_accounts (member_user_id, status);
 create index if not exists scheduled_rides_requested_by_idx on public.scheduled_rides (requested_by, status);
+
+-- ============================================================
+-- DRIVER SUBSCRIPTIONS TASK
+--
+-- subscription_plans/driver_subscriptions already existed with wide-
+-- open dev policies from an earlier task — replaced with real
+-- owner/admin-scoped policies now that this task puts money and
+-- feature-gating behind them.
+--
+-- payments.ride_id is not null (it's a ride-payment table: rider pays
+-- driver for a specific ride), which doesn't fit a driver-pays-
+-- platform subscription purchase. Rather than weaken that table's
+-- integrity constraints, driver_subscriptions gets its own small
+-- payment audit trail (method/reference/paid_at) and mirrors the same
+-- self-reported-UPI-reference pattern already used for ride payments.
+--
+-- Scope decision (asked user): Basic unlocks nothing extra. Pro
+-- unlocks Preferred Riders (approving is now gated below — the prior
+-- preferred_drivers policy let any driver approve). Elite adds
+-- priority placement in the rider's nearby-drivers list on top of
+-- Pro. Ads/Rewards aren't built anywhere in this codebase yet, so
+-- nothing gates them — `benefits` stays a flexible jsonb column for
+-- a future task to read instead of inventing gates for features that
+-- don't exist. Grace period is 3 days after expiry before Pro/Elite
+-- features actually restrict (status flows active -> grace_period ->
+-- expired, transitioned client-side — see src/lib/subscriptions.js).
+-- ============================================================
+
+alter table public.driver_subscriptions
+  add column if not exists payment_method text check (payment_method in ('upi')),
+  add column if not exists payment_reference text,
+  add column if not exists paid_at timestamptz;
+
+insert into public.subscription_plans (name, price, duration_days, benefits)
+select 'basic', 199, 30, '{"preferred_riders": false, "priority_visibility": false}'::jsonb
+where not exists (select 1 from public.subscription_plans where name = 'basic');
+
+insert into public.subscription_plans (name, price, duration_days, benefits)
+select 'pro', 499, 30, '{"preferred_riders": true, "priority_visibility": false}'::jsonb
+where not exists (select 1 from public.subscription_plans where name = 'pro');
+
+insert into public.subscription_plans (name, price, duration_days, benefits)
+select 'elite', 899, 30, '{"preferred_riders": true, "priority_visibility": true}'::jsonb
+where not exists (select 1 from public.subscription_plans where name = 'elite');
+
+drop policy if exists "dev_all_subscription_plans" on public.subscription_plans;
+drop policy if exists "dev_all_driver_subscriptions" on public.driver_subscriptions;
+
+-- Catalog is readable by any authenticated user; only admins manage it.
+create policy "subscription_plans_select_all"
+  on public.subscription_plans for select
+  using (true);
+
+create policy "subscription_plans_admin_write"
+  on public.subscription_plans for all
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- Reading isn't the sensitive operation here (same reasoning as
+-- preferred_drivers): a rider needs to check ANY driver's active tier
+-- to sort Discovery by priority visibility, so select is open to any
+-- authenticated user. Only insert/update (creating/approving a paid
+-- subscription) are owner/admin-scoped below.
+create policy "driver_subscriptions_select_all"
+  on public.driver_subscriptions for select
+  using (true);
+
+create policy "driver_subscriptions_insert_own"
+  on public.driver_subscriptions for insert
+  with check (auth.uid() in (select user_id from public.driver_profiles where id = driver_id));
+
+create policy "driver_subscriptions_update_own_or_admin"
+  on public.driver_subscriptions for update
+  using (
+    auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  )
+  with check (
+    auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+-- Gate Preferred Riders approval behind an active/grace_period Pro or
+-- Elite subscription — replaces the prior blanket "any driver can set
+-- any status" policy from the Preferred Drivers task. Declining/
+-- blocking a rider is left ungated since that's a safety action, not
+-- a paid benefit.
+drop policy if exists "preferred_drivers_update_own" on public.preferred_drivers;
+create policy "preferred_drivers_update_own"
+  on public.preferred_drivers for update
+  using (
+    auth.uid() = rider_id
+    or auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+  )
+  with check (
+    (auth.uid() = rider_id and status = 'removed')
+    or (
+      auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+      and (
+        status <> 'active'
+        or exists (
+          select 1 from public.driver_subscriptions ds
+          join public.subscription_plans sp on sp.id = ds.plan_id
+          where ds.driver_id = preferred_drivers.driver_id
+            and ds.status in ('active', 'grace_period')
+            and sp.name in ('pro', 'elite')
+        )
+      )
+    )
+  );
+
+create index if not exists driver_subscriptions_driver_idx on public.driver_subscriptions (driver_id, status);

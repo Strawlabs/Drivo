@@ -5,6 +5,7 @@ import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchDriverEarnings, summarizeForPeriod, bucketTrend, buildEarningsReportCsv, PERIOD_DAYS } from '@/lib/earnings'
 import { HOME_ZONES, validateGoHomeInput, activateGoHome, deactivateGoHome, fetchActiveGoHomeSession, matchGoHomeRide, toLocalDatetimeInputValue } from '@/lib/goHome'
 import { fetchPreferredRidersForDriver, approvePreferredRider, declinePreferredRider, blockPreferredRider } from '@/lib/preferredDrivers'
+import { hasQualifyingTier, checkAndUpdateSubscriptionStatus } from '@/lib/subscriptions'
 
 // ── Mock data ──────────────────────────────────────────────────
 const DISCOVERY_DRIVERS = [
@@ -479,13 +480,17 @@ function FamilyTab() {
 }
 
 // ── Preferred Riders ─────────────────────────────────────────────
-function PreferredRidersModal({ driverProfileId, onClose, onCountChange }) {
+function PreferredRidersModal({ driverProfileId, onClose, onCountChange, onOpenSubscription }) {
   const [loading, setLoading] = useState(true)
   const [riders, setRiders] = useState([])
   const [busyId, setBusyId] = useState(null)
+  const [qualifies, setQualifies] = useState(true)
 
   useEffect(() => {
-    fetchPreferredRidersForDriver(driverProfileId).then(list => { setRiders(list); setLoading(false) })
+    Promise.all([
+      fetchPreferredRidersForDriver(driverProfileId),
+      hasQualifyingTier(driverProfileId),
+    ]).then(([list, q]) => { setRiders(list); setQualifies(q); setLoading(false) })
   }, [driverProfileId])
 
   const pending = riders.filter(r => r.status === 'pending')
@@ -515,6 +520,15 @@ function PreferredRidersModal({ driverProfileId, onClose, onCountChange }) {
 
         {loading && <p style={{ fontSize: 14, color: 'var(--color-secondary)', textAlign: 'center', padding: '20px 0' }}>Loading…</p>}
 
+        {!loading && !qualifies && (
+          <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 12, padding: 12, marginBottom: 16 }}>
+            <p style={{ fontSize: 13, color: '#92620a', marginBottom: 8 }}>Approving Preferred Riders requires a Pro or Elite subscription.</p>
+            <button onClick={onOpenSubscription} style={{ background: 'none', border: 'none', color: 'var(--color-primary)', fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+              View Plans →
+            </button>
+          </div>
+        )}
+
         {!loading && pending.length > 0 && (
           <div className="flex flex-col gap-2 mb-5">
             <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--color-secondary)', textTransform: 'uppercase' }}>Pending Requests</p>
@@ -526,10 +540,12 @@ function PreferredRidersModal({ driverProfileId, onClose, onCountChange }) {
                     style={{ height: 34, padding: '0 12px', border: '1px solid var(--color-outline-variant)', background: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
                     Decline
                   </button>
-                  <button onClick={() => handle(approvePreferredRider, r.id)} disabled={busyId === r.id}
-                    style={{ height: 34, padding: '0 12px', border: 'none', background: 'var(--color-primary)', borderRadius: 8, fontSize: 12, fontWeight: 700, color: 'white', cursor: 'pointer' }}>
-                    Approve
-                  </button>
+                  {qualifies && (
+                    <button onClick={() => handle(approvePreferredRider, r.id)} disabled={busyId === r.id}
+                      style={{ height: 34, padding: '0 12px', border: 'none', background: 'var(--color-primary)', borderRadius: 8, fontSize: 12, fontWeight: 700, color: 'white', cursor: 'pointer' }}>
+                      Approve
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -846,18 +862,21 @@ export default function DriverHomePage() {
       .then(({ count }) => setPreferredRidersCount(count ?? 0))
   }, [driverProfileId])
 
-  // Subscription status — most recent active plan, if any
+  // Subscription status — most recent active/grace_period plan, if any.
+  // Transitions expired dates first (no backend cron) so this never shows stale "active".
   useEffect(() => {
     if (!driverProfileId) return
-    supabase
-      .from('driver_subscriptions')
-      .select('status, expiry_date, subscription_plans(name)')
-      .eq('driver_id', driverProfileId)
-      .eq('status', 'active')
-      .order('expiry_date', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => setSubscription(data ?? null))
+    checkAndUpdateSubscriptionStatus(driverProfileId).finally(() => {
+      supabase
+        .from('driver_subscriptions')
+        .select('status, expiry_date, subscription_plans(name)')
+        .eq('driver_id', driverProfileId)
+        .in('status', ['active', 'grace_period'])
+        .order('expiry_date', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+        .then(({ data }) => setSubscription(data ?? null))
+    })
   }, [driverProfileId])
 
   // Driver rating updates live as riders submit reviews (see recalculateDriverRating)
@@ -1037,6 +1056,7 @@ export default function DriverHomePage() {
           driverProfileId={driverProfileId}
           onClose={() => setShowPreferredRiders(false)}
           onCountChange={setPreferredRidersCount}
+          onOpenSubscription={() => { setShowPreferredRiders(false); navigate('/driver/subscription') }}
         />
       )}
 
@@ -1059,7 +1079,7 @@ export default function DriverHomePage() {
           </div>
         </div>
         <div className="flex flex-col gap-1" style={{ flex: 1 }}>
-          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode', onClick: () => { setShowGoHomeModal(true); setDrawerOpen(false) } }, { icon: '📊', label: 'Analytics' }, { icon: '⭐', label: 'Subscription' }, { icon: '📣', label: 'Ads' }, { icon: '⚙️', label: 'Settings' }].map(({ icon, label, active, onClick }) => (
+          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode', onClick: () => { setShowGoHomeModal(true); setDrawerOpen(false) } }, { icon: '📊', label: 'Analytics' }, { icon: '⭐', label: 'Subscription', onClick: () => { setDrawerOpen(false); navigate('/driver/subscription') } }, { icon: '📣', label: 'Ads' }, { icon: '⚙️', label: 'Settings' }].map(({ icon, label, active, onClick }) => (
             <button key={label} onClick={onClick} className="flex items-center gap-4 text-left" style={{ padding: '10px 12px', borderRadius: 8, border: 'none', background: active ? 'var(--color-secondary-container)' : 'transparent', color: active ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)', fontSize: 16, fontWeight: active ? 700 : 400, cursor: onClick ? 'pointer' : 'default' }}>
               <span style={{ fontSize: 18 }}>{icon}</span>{label}
               {label === 'Go Home Mode' && goHomeSession && (

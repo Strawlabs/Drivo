@@ -17,7 +17,10 @@ export async function fetchAvailableDrivers({ excludeDriverId } = {}) {
   const { data, error } = await query
   if (error) throw error
 
-  return (data ?? []).map(d => {
+  const driverIds = (data ?? []).map(d => d.id)
+  const priorityIds = await fetchElitePriorityDriverIds(driverIds)
+
+  const drivers = (data ?? []).map(d => {
     const vehicle = d.vehicles?.[0] ?? null
     const name = d.users?.name?.trim() || 'Driver'
     return {
@@ -28,8 +31,31 @@ export async function fetchAvailableDrivers({ excludeDriverId } = {}) {
       vehicleId: vehicle?.id ?? null,
       type: vehicle ? [vehicle.make, vehicle.model].filter(Boolean).join(' ') : 'EV',
       vehicleType: vehicle?.vehicle_type ?? null,
+      isPriority: priorityIds.has(d.id),
     }
   })
+
+  // Elite subscribers surface first — the "priority visibility" benefit.
+  return drivers.sort((a, b) => (b.isPriority === a.isPriority) ? 0 : b.isPriority ? 1 : -1)
+}
+
+/*
+  Elite is the only tier that grants priority placement (see
+  src/lib/subscriptions.js scope decision). Active or grace_period
+  both still count as "currently subscribed" — access doesn't drop
+  the instant a renewal is late.
+*/
+async function fetchElitePriorityDriverIds(driverIds) {
+  if (driverIds.length === 0) return new Set()
+
+  const { data, error } = await supabase
+    .from('driver_subscriptions')
+    .select('driver_id, status, subscription_plans(name)')
+    .in('driver_id', driverIds)
+    .in('status', ['active', 'grace_period'])
+  if (error) return new Set()
+
+  return new Set((data ?? []).filter(row => row.subscription_plans?.name === 'elite').map(row => row.driver_id))
 }
 
 /*

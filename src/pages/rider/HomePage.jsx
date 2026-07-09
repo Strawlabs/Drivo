@@ -160,7 +160,12 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
                   <div className="flex items-center gap-3">
                     <Avatar initials={driver.avatar} />
                     <div>
-                      <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-on-surface)' }}>{driver.name}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-on-surface)' }}>{driver.name}</p>
+                        {driver.isPriority && (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: '#b45309', background: 'rgba(245,158,11,0.14)', padding: '2px 6px', borderRadius: 9999 }}>⭐ PRIORITY</span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1" style={{ marginTop: 2 }}>
                         <StarIcon />
                         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
@@ -412,6 +417,9 @@ function DriversTab({ onBookDriver }) {
                   <div>
                     <div className="flex items-center gap-2">
                       <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-on-surface)' }}>{driver.name}</p>
+                      {driver.isPriority && (
+                        <span style={{ fontSize: 9, fontWeight: 700, color: '#b45309', background: 'rgba(245,158,11,0.14)', padding: '2px 6px', borderRadius: 9999 }}>⭐ PRIORITY</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5 mt-1">
                       <StarIcon />
