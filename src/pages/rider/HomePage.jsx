@@ -2,14 +2,9 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
-
-// ── Mock data ──────────────────────────────────────────────────
-const NEARBY_DRIVERS = [
-  { id: 1, name: 'Ramesh K.',   rating: 4.9, eta: '3 mins', type: 'EV Sedan',     battery: 94, avatar: 'RK', trips: 1240, safety: 4.9, languages: ['Hindi', 'English'], tags: ['EV Certified', 'Background Checked'] },
-  { id: 2, name: 'Priya S.',    rating: 4.8, eta: '5 mins', type: 'EV Hatchback', battery: 82, avatar: 'PS', trips: 870,  safety: 4.8, languages: ['Tamil', 'English'],  tags: ['EV Certified', 'Background Checked'] },
-  { id: 3, name: 'Anita M.',    rating: 5.0, eta: '7 mins', type: 'EV Auto',      battery: 76, avatar: 'AM', trips: 2100, safety: 5.0, languages: ['Kannada', 'English'], tags: ['EV Certified', 'Background Checked', 'Premium Tier'] },
-  { id: 4, name: 'Venkatesh R.', rating: 4.7, eta: '9 mins', type: 'EV Sedan',   battery: 88, avatar: 'VR', trips: 560,  safety: 4.7, languages: ['Telugu', 'English'],  tags: ['EV Certified'] },
-]
+import { fetchAvailableDrivers } from '@/lib/drivers'
+import { fetchPreferredDriversForRider, removePreferredDriver, fetchSubscriptionTier, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
+import { dispatchDueScheduledRides } from '@/lib/family'
 
 const PAST_TRIPS = [
   { id: 1, from: 'Koramangala 5th Block', to: 'MG Road Metro Station', date: 'Today, 9:14 AM',      fare: '₹184', distance: '6.2 km', duration: '18 mins', driver: 'Ramesh K.', rating: 5, status: 'completed' },
@@ -49,6 +44,11 @@ function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
 // ── TAB: Home ───────────────────────────────────────────────────
 function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
   const [search, setSearch] = useState('')
+  const [drivers, setDrivers] = useState([])
+
+  useEffect(() => {
+    fetchAvailableDrivers().then(setDrivers).catch(() => setDrivers([]))
+  }, [])
 
   return (
     <>
@@ -147,43 +147,48 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
         <div className="flex justify-between items-center mb-4 px-5">
           <h3 style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-on-surface)' }}>Nearby Drivers</h3>
           <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-secondary)', background: 'var(--color-surface-container)', padding: '2px 10px', borderRadius: 9999 }}>
-            8 active now
+            {drivers.length} active now
           </span>
         </div>
-        <div className="flex overflow-x-auto gap-3 px-5 pb-1" style={{ scrollbarWidth: 'none' }}>
-          {NEARBY_DRIVERS.map(driver => (
-            <div key={driver.id} className="flex flex-col gap-3" style={{ minWidth: 280, background: 'var(--color-surface)', border: '1px solid rgba(187,203,187,0.4)', borderRadius: 16, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', padding: 16, flexShrink: 0 }}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Avatar initials={driver.avatar} />
-                  <div>
-                    <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-on-surface)' }}>{driver.name}</p>
-                    <div className="flex items-center gap-1" style={{ marginTop: 2 }}>
-                      <StarIcon />
-                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
+        {drivers.length === 0 ? (
+          <p className="px-5" style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No EV drivers online right now — check back soon.</p>
+        ) : (
+          <div className="flex overflow-x-auto gap-3 px-5 pb-1" style={{ scrollbarWidth: 'none' }}>
+            {drivers.map(driver => (
+              <div key={driver.id} className="flex flex-col gap-3" style={{ minWidth: 280, background: 'var(--color-surface)', border: '1px solid rgba(187,203,187,0.4)', borderRadius: 16, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', padding: 16, flexShrink: 0 }}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Avatar initials={driver.avatar} />
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-on-surface)' }}>{driver.name}</p>
+                        {driver.isPriority && (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: '#b45309', background: 'rgba(245,158,11,0.14)', padding: '2px 6px', borderRadius: 9999 }}>⭐ PRIORITY</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1" style={{ marginTop: 2 }}>
+                        <StarIcon />
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
+                      </div>
                     </div>
                   </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>Available now</p>
+                    <p style={{ fontSize: 10, color: 'var(--color-secondary)', marginTop: 2 }}>{driver.type}</p>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>{driver.eta} away</p>
-                  <p style={{ fontSize: 10, color: 'var(--color-secondary)', marginTop: 2 }}>{driver.type}</p>
+                <div className="flex justify-end items-center" style={{ background: 'var(--color-surface-container-low)', padding: '8px 12px', borderRadius: 12 }}>
+                  <button
+                    onClick={() => onBookDriver(driver)}
+                    style={{ background: 'var(--color-primary)', color: 'white', padding: '5px 16px', borderRadius: 9999, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Book
+                  </button>
                 </div>
               </div>
-              <div className="flex justify-between items-center" style={{ background: 'var(--color-surface-container-low)', padding: '8px 12px', borderRadius: 12 }}>
-                <div className="flex items-center gap-1.5">
-                  <span className="material-symbols-outlined" style={{ fontSize: 18, color: 'var(--color-primary)' }}>battery_charging_full</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.battery}%</span>
-                </div>
-                <button
-                  onClick={() => onBookDriver(driver)}
-                  style={{ background: 'var(--color-primary)', color: 'white', padding: '5px 16px', borderRadius: 9999, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
-                >
-                  Book
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Schedule a Ride */}
@@ -353,18 +358,16 @@ function TripsTab() {
 }
 
 // ── TAB: Drivers (Discovery) ─────────────────────────────────────
-const DISCOVERY_DRIVERS = [
-  { id: 1, name: 'Ramesh K.',    rating: 4.9, vehicle: 'Tesla Model S',  status: 'available',  eta: null,  avatar: 'RK', preferred: true,  trips: 1240 },
-  { id: 2, name: 'Priya S.',     rating: 4.8, vehicle: 'Lucid Air Pure', status: 'available',  eta: '5m',  avatar: 'PS', preferred: false, trips: 870  },
-  { id: 3, name: 'Anita M.',     rating: 5.0, vehicle: 'Rivian R1S',     status: 'on_ride',    eta: null,  avatar: 'AM', preferred: true,  trips: 2100 },
-  { id: 4, name: 'Venkatesh R.', rating: 4.7, vehicle: 'BYD Atto 3',     status: 'available',  eta: '8m',  avatar: 'VR', preferred: false, trips: 560  },
-]
-
 const FILTERS = ['EV Auto', 'EV Car', 'Distance']
 
-function DriversTab() {
+function DriversTab({ onBookDriver }) {
   const [view, setView] = useState('list')
   const [activeFilter, setActiveFilter] = useState('EV Auto')
+  const [drivers, setDrivers] = useState([])
+
+  useEffect(() => {
+    fetchAvailableDrivers().then(setDrivers).catch(() => setDrivers([]))
+  }, [])
 
   return (
     <div style={{ paddingBottom: 120 }}>
@@ -402,53 +405,50 @@ function DriversTab() {
 
       {/* Driver cards */}
       <div className="px-5 flex flex-col gap-3">
-        {DISCOVERY_DRIVERS.map(driver => {
-          const isOnRide = driver.status === 'on_ride'
-          const statusLabel = isOnRide ? 'Currently on ride' : driver.eta ? `Available in ${driver.eta}` : 'Available Now'
-          const statusColor = isOnRide ? 'var(--color-secondary)' : 'var(--color-primary)'
-
-          return (
-            <div key={driver.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)' }}>
-              <div className="flex items-start gap-3 mb-3">
-                <Avatar initials={driver.avatar} size={56} />
-                <div style={{ flex: 1 }}>
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-on-surface)' }}>{driver.name}</p>
-                        {driver.preferred && (
-                          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--color-primary)', background: 'rgba(0,109,55,0.1)', padding: '2px 7px', borderRadius: 9999 }}>PREFERRED</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <StarIcon />
-                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
-                        <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.vehicle}</span>
-                      </div>
+        {drivers.length === 0 && (
+          <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No EV drivers online right now — check back soon.</p>
+        )}
+        {drivers.map(driver => (
+          <div key={driver.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)' }}>
+            <div className="flex items-start gap-3 mb-3">
+              <Avatar initials={driver.avatar} size={56} />
+              <div style={{ flex: 1 }}>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-on-surface)' }}>{driver.name}</p>
+                      {driver.isPriority && (
+                        <span style={{ fontSize: 9, fontWeight: 700, color: '#b45309', background: 'rgba(245,158,11,0.14)', padding: '2px 6px', borderRadius: 9999 }}>⭐ PRIORITY</span>
+                      )}
                     </div>
-                    <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-secondary)" strokeWidth="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-                    </button>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <StarIcon />
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
+                      <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.type}</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5 mt-2">
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor, flexShrink: 0, display: 'inline-block' }} />
-                    <span style={{ fontSize: 12, fontWeight: 600, color: statusColor }}>{statusLabel}</span>
-                  </div>
+                  <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-secondary)" strokeWidth="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5 mt-2">
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-primary)', flexShrink: 0, display: 'inline-block' }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)' }}>Available Now</span>
                 </div>
               </div>
-
-              <div className="flex gap-2">
-                <button style={{ flex: 1, height: 40, border: '1px solid var(--color-outline-variant)', borderRadius: 10, background: 'none', fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
-                  View Profile
-                </button>
-                <button disabled={isOnRide}
-                  style={{ flex: 1, height: 40, border: 'none', borderRadius: 10, background: isOnRide ? 'var(--color-surface-container)' : 'var(--color-on-surface)', color: isOnRide ? 'var(--color-secondary)' : 'white', fontSize: 13, fontWeight: 600, cursor: isOnRide ? 'default' : 'pointer' }}>
-                  {isOnRide ? 'On Ride' : 'Request Ride'}
-                </button>
-              </div>
             </div>
-          )
-        })}
+
+            <div className="flex gap-2">
+              <button style={{ flex: 1, height: 40, border: '1px solid var(--color-outline-variant)', borderRadius: 10, background: 'none', fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
+                View Profile
+              </button>
+              <button onClick={() => onBookDriver(driver)}
+                style={{ flex: 1, height: 40, border: 'none', borderRadius: 10, background: 'var(--color-on-surface)', color: 'white', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                Request Ride
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Drivo Guarantee */}
@@ -487,7 +487,7 @@ function DriversTab() {
 }
 
 // ── TAB: Profile ────────────────────────────────────────────────
-function ProfileTab({ firstName, email, onSignOut }) {
+function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpenFamily }) {
   return (
     <div className="px-5 pt-6 pb-8">
       {/* Profile hero */}
@@ -525,7 +525,8 @@ function ProfileTab({ firstName, email, onSignOut }) {
         {
           title: 'Preferences',
           items: [
-            { icon: '🚗', label: 'Preferred Drivers' },
+            { icon: '🚗', label: 'Preferred Drivers', onClick: onOpenPreferredDrivers },
+            { icon: '👨‍👩‍👧', label: 'Family', onClick: onOpenFamily },
             { icon: '🌿', label: 'Eco Impact Report' },
             { icon: '🔔', label: 'Notifications' },
           ]
@@ -542,11 +543,12 @@ function ProfileTab({ firstName, email, onSignOut }) {
         <div key={title} style={{ marginBottom: 20 }}>
           <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{title}</p>
           <div style={{ background: 'white', borderRadius: 16, overflow: 'hidden', boxShadow: '0 1px 4px rgba(26,43,60,0.06)' }}>
-            {items.map(({ icon, label }, i) => (
+            {items.map(({ icon, label, onClick }, i) => (
               <button
                 key={label}
+                onClick={onClick}
                 className="flex items-center justify-between w-full text-left"
-                style={{ padding: '14px 16px', background: 'none', border: 'none', borderTop: i > 0 ? '1px solid var(--color-outline-variant)' : 'none', cursor: 'pointer' }}
+                style={{ padding: '14px 16px', background: 'none', border: 'none', borderTop: i > 0 ? '1px solid var(--color-outline-variant)' : 'none', cursor: onClick ? 'pointer' : 'default' }}
               >
                 <div className="flex items-center gap-3">
                   <span style={{ fontSize: 18 }}>{icon}</span>
@@ -571,12 +573,120 @@ function ProfileTab({ firstName, email, onSignOut }) {
   )
 }
 
+// ── Preferred Drivers ────────────────────────────────────────────
+function PreferredDriversModal({ userId, onClose, onBookDriver }) {
+  const [loading, setLoading] = useState(true)
+  const [drivers, setDrivers] = useState([])
+  const [tier, setTier] = useState('none')
+  const [removingId, setRemovingId] = useState(null)
+
+  useEffect(() => {
+    async function load() {
+      const [list, t] = await Promise.all([
+        fetchPreferredDriversForRider(userId),
+        fetchSubscriptionTier(userId),
+      ])
+      setDrivers(list)
+      setTier(t)
+      setLoading(false)
+    }
+    load()
+  }, [userId])
+
+  const isEligible = ELIGIBLE_TIERS.includes(tier)
+
+  async function handleRemove(preferredId) {
+    setRemovingId(preferredId)
+    try {
+      await removePreferredDriver(preferredId)
+      setDrivers(prev => prev.filter(d => d.preferredId !== preferredId))
+    } finally {
+      setRemovingId(null)
+    }
+  }
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(11,28,48,0.6)', backdropFilter: 'blur(4px)' }} />
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201, background: 'var(--color-surface)', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 20px 40px', boxShadow: '0 -10px 40px rgba(26,43,60,0.2)', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ width: 40, height: 4, background: 'var(--color-outline-variant)', borderRadius: 2, margin: '0 auto 20px' }} />
+        <div className="flex items-center justify-between mb-4">
+          <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)' }}>🚗 Preferred Drivers</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-secondary)' }}>✕</button>
+        </div>
+
+        {!isEligible && (
+          <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 16 }}>
+            <p style={{ fontSize: 13, color: '#B45309' }}>
+              {drivers.length > 0
+                ? "Your Care Plan / Family Plan has expired — upgrade to request these drivers directly again."
+                : "Saving and requesting preferred drivers is a Care Plan / Family Plan benefit."}
+            </p>
+          </div>
+        )}
+
+        {loading && <p style={{ fontSize: 14, color: 'var(--color-secondary)', textAlign: 'center', padding: '20px 0' }}>Loading…</p>}
+
+        {!loading && drivers.length === 0 && (
+          <p style={{ fontSize: 14, color: 'var(--color-secondary)', textAlign: 'center', padding: '20px 0' }}>
+            No preferred drivers yet — save one from the ride-completion screen after your next ride.
+          </p>
+        )}
+
+        <div className="flex flex-col gap-3">
+          {drivers.map(d => (
+            <div key={d.preferredId} style={{ background: 'var(--color-surface-container-low)', borderRadius: 14, padding: 14 }}>
+              <div className="flex items-center gap-3 mb-2">
+                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                  {d.avatar}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)' }}>{d.name}</p>
+                  <div className="flex items-center gap-1.5">
+                    <span style={{ fontSize: 12, color: '#F59E0B' }}>★</span>
+                    <span style={{ fontSize: 12, color: 'var(--color-on-surface)' }}>{d.rating}</span>
+                    <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {d.type}</span>
+                  </div>
+                </div>
+                <button onClick={() => handleRemove(d.preferredId)} disabled={removingId === d.preferredId}
+                  style={{ background: 'none', border: 'none', color: 'var(--color-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  {removingId === d.preferredId ? '…' : 'Remove'}
+                </button>
+              </div>
+
+              <p style={{ fontSize: 12, color: 'var(--color-secondary)', marginBottom: 8 }}>
+                Last ride: {d.lastRideAt ? new Date(d.lastRideAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No completed rides yet'}
+              </p>
+
+              {d.status === 'pending' && (
+                <p style={{ fontSize: 12, color: 'var(--color-secondary)', fontStyle: 'italic' }}>Waiting for driver approval</p>
+              )}
+              {d.status === 'blocked_by_driver' && (
+                <p style={{ fontSize: 12, color: 'var(--color-error)' }}>This driver isn't accepting your requests right now</p>
+              )}
+              {d.status === 'active' && (
+                <button
+                  onClick={() => onBookDriver(d)}
+                  disabled={!d.isOnline || !isEligible}
+                  style={{ width: '100%', height: 38, background: (d.isOnline && isEligible) ? 'var(--color-primary)' : 'var(--color-surface-container)', color: (d.isOnline && isEligible) ? 'white' : 'var(--color-secondary)', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: (d.isOnline && isEligible) ? 'pointer' : 'default' }}>
+                  {!isEligible ? 'Upgrade to request' : d.isOnline ? 'Request Ride' : 'Offline right now'}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── Main Page ───────────────────────────────────────────────────
 export default function RiderHomePage() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [activeNav, setActiveNav] = useState('home')
   const [firstName, setFirstName] = useState('Rider')
+  const [showPreferredDrivers, setShowPreferredDrivers] = useState(false)
 
   useEffect(() => {
     if (!user) return
@@ -584,6 +694,22 @@ export default function RiderHomePage() {
       .then(({ data }) => {
         if (data?.name) setFirstName(data.name.split(' ')[0])
       })
+  }, [user])
+
+  /*
+    No backend cron exists in this app. While the rider has the app
+    open, periodically check for scheduled_rides whose time has
+    arrived and dispatch them into real rides — matches the pattern
+    already used for Go Home Mode / UPI timeout (client-anchored,
+    survives reload, but only fires while a client is actually open).
+  */
+  useEffect(() => {
+    if (!user) return
+    dispatchDueScheduledRides(user.id).catch(() => {})
+    const interval = setInterval(() => {
+      dispatchDueScheduledRides(user.id).catch(() => {})
+    }, 60000)
+    return () => clearInterval(interval)
   }, [user])
 
   const hour = new Date().getHours()
@@ -617,9 +743,17 @@ export default function RiderHomePage() {
       <main className="flex-1 overflow-y-auto pb-28">
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} />}
         {activeNav === 'trips'   && <TripsTab />}
-        {activeNav === 'drivers' && <DriversTab />}
-        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} />}
+        {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
+        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} />}
       </main>
+
+      {showPreferredDrivers && user && (
+        <PreferredDriversModal
+          userId={user.id}
+          onClose={() => setShowPreferredDrivers(false)}
+          onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })}
+        />
+      )}
 
       {/* Bottom Nav */}
       <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-4 pt-2" style={{ background: 'var(--color-surface)', boxShadow: '0px -4px 20px rgba(26,43,60,0.05)', borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>

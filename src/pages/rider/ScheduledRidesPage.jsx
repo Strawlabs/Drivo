@@ -1,14 +1,17 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-
-const NEARBY_DRIVERS = [
-  { id: 1, name: 'Ramesh K.', rating: 4.9, avatar: 'RK' },
-  { id: 2, name: 'Priya S.',  rating: 4.8, avatar: 'PS' },
-  { id: 3, name: 'Anita M.', rating: 5.0, avatar: 'AM' },
-]
+import { useAuth } from '@/hooks/useAuth.jsx'
+import { fetchPreferredDriversForRider } from '@/lib/preferredDrivers'
+import { fetchFamilyMembers, fetchUpcomingScheduledRides, scheduleRide, cancelScheduledRide } from '@/lib/family'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const DAY_NAMES = ['Mo','Tu','We','Th','Fr','Sa','Su']
+
+const STATUS_LABEL = {
+  scheduled: { text: 'Confirmed', color: 'var(--color-primary)', bg: 'rgba(46,204,113,0.12)' },
+  dispatched: { text: 'In progress', color: 'var(--color-primary)', bg: 'rgba(46,204,113,0.12)' },
+  driver_cancelled: { text: 'Driver cancelled', color: 'var(--color-error)', bg: 'rgba(186,26,26,0.1)' },
+}
 
 function MiniCalendar({ selectedDate, onSelect }) {
   const today = new Date()
@@ -93,31 +96,91 @@ function MiniCalendar({ selectedDate, onSelect }) {
   )
 }
 
-const UPCOMING = [
-  { id: 1, from: 'Koramangala', to: 'Indiranagar 100 Ft Rd', date: 'Tomorrow', time: '08:30 AM', driver: 'Ramesh K.', fare: '₹210', status: 'confirmed' },
-  { id: 2, from: 'HSR Layout',  to: 'MG Road Metro',         date: 'Thu, 26 Jun', time: '09:00 AM', driver: 'Any Driver',  fare: '₹185', status: 'pending' },
-]
-
 export default function ScheduledRidesPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+
+  const [upcoming, setUpcoming] = useState([])
+  const [preferredDrivers, setPreferredDrivers] = useState([])
+  const [familyMembers, setFamilyMembers] = useState([])
+  const [loadingData, setLoadingData] = useState(true)
+
   const [selectedDate, setSelectedDate] = useState(null)
   const [pickup, setPickup] = useState('')
   const [destination, setDestination] = useState('')
   const [time, setTime] = useState('')
-  const [selectedDriver, setSelectedDriver] = useState(null)
+  const [selectedDriver, setSelectedDriver] = useState('any')
+  const [ridingFor, setRidingFor] = useState('self')
   const [scheduled, setScheduled] = useState(false)
   const [scheduling, setScheduling] = useState(false)
+  const [scheduleError, setScheduleError] = useState('')
+
+  const load = useCallback(async () => {
+    if (!user) return
+    const [sr, pd, fm] = await Promise.all([
+      fetchUpcomingScheduledRides(user.id),
+      fetchPreferredDriversForRider(user.id),
+      fetchFamilyMembers(user.id),
+    ])
+    setUpcoming(sr)
+    setPreferredDrivers(pd.filter(d => d.status === 'active'))
+    setFamilyMembers(fm)
+    setLoadingData(false)
+  }, [user])
+
+  useEffect(() => { load() }, [load])
 
   const formattedDate = selectedDate
     ? selectedDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
     : ''
 
   async function handleSchedule() {
-    if (scheduling) return
+    if (scheduling || !user) return
+    setScheduleError('')
+
+    if (!selectedDate || !time) {
+      setScheduleError('Please select both a date and a time.')
+      return
+    }
+    if (!pickup.trim() || !destination.trim()) {
+      setScheduleError('Please enter pickup and destination.')
+      return
+    }
+    const [hours, minutes] = time.split(':').map(Number)
+    const scheduledAt = new Date(selectedDate)
+    scheduledAt.setHours(hours, minutes, 0, 0)
+
+    const riderId = ridingFor === 'self' ? user.id : ridingFor
+    const preferredDriverId = selectedDriver === 'any' ? null : selectedDriver
+
     setScheduling(true)
-    await new Promise(r => setTimeout(r, 1200))
-    setScheduling(false)
-    setScheduled(true)
+    try {
+      await scheduleRide({
+        requestedBy: user.id,
+        riderId,
+        preferredDriverId,
+        pickupAddress: pickup.trim(),
+        destinationAddress: destination.trim(),
+        scheduledAt,
+      })
+      setScheduled(true)
+      setPickup('')
+      setDestination('')
+      setTime('')
+      setSelectedDate(null)
+      setSelectedDriver('any')
+      setRidingFor('self')
+      await load()
+    } catch (err) {
+      setScheduleError(err.message)
+    } finally {
+      setScheduling(false)
+    }
+  }
+
+  async function handleCancel(id) {
+    await cancelScheduledRide(id)
+    await load()
   }
 
   return (
@@ -142,45 +205,51 @@ export default function ScheduledRidesPage() {
         {scheduled && (
           <div style={{ background: 'rgba(46,204,113,0.12)', border: '1px solid var(--color-primary-container)', borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="var(--color-primary)" strokeWidth="2.5" strokeLinecap="round"/></svg>
-            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-primary-container)' }}>Ride scheduled! You'll get a reminder 30 minutes before.</p>
+            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-primary-container)' }}>Ride scheduled! You'll get a confirmation notification.</p>
           </div>
         )}
 
         {/* Upcoming Rides */}
-        {UPCOMING.length > 0 && (
+        {!loadingData && upcoming.length > 0 && (
           <section style={{ marginBottom: 28 }}>
             <h3 style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 12 }}>Upcoming</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {UPCOMING.map(ride => (
-                <div key={ride.id} style={{ background: 'white', border: '1px solid rgba(241,245,249,1)', borderRadius: 14, padding: 14, boxShadow: '0 2px 8px rgba(26,43,60,0.04)' }}>
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--color-primary)"><circle cx="12" cy="12" r="6"/></svg>
-                        <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{ride.from}</p>
+              {upcoming.map(ride => {
+                const label = STATUS_LABEL[ride.status] ?? { text: ride.status, color: 'var(--color-secondary)', bg: 'var(--color-surface-container-low)' }
+                return (
+                  <div key={ride.id} style={{ background: 'white', border: '1px solid rgba(241,245,249,1)', borderRadius: 14, padding: 14, boxShadow: '0 2px 8px rgba(26,43,60,0.04)' }}>
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--color-primary)"><circle cx="12" cy="12" r="6"/></svg>
+                          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{ride.pickup}</p>
+                        </div>
+                        <div style={{ width: 1, height: 10, background: 'var(--color-outline-variant)', marginLeft: 5, margin: '2px 0 2px 5px' }} />
+                        <div className="flex items-center gap-1.5">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/></svg>
+                          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{ride.destination}</p>
+                        </div>
                       </div>
-                      <div style={{ width: 1, height: 10, background: 'var(--color-outline-variant)', marginLeft: 5, margin: '2px 0 2px 5px' }} />
-                      <div className="flex items-center gap-1.5">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/></svg>
-                        <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{ride.to}</p>
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 9999, fontSize: 11, fontWeight: 700, background: ride.status === 'confirmed' ? 'rgba(46,204,113,0.12)' : 'var(--color-surface-container)', color: ride.status === 'confirmed' ? 'var(--color-primary)' : 'var(--color-secondary)' }}>
-                        {ride.status === 'confirmed' ? 'Confirmed' : 'Pending'}
+                      <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 9999, fontSize: 11, fontWeight: 700, background: label.bg, color: label.color }}>
+                        {label.text}
                       </span>
-                      <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-primary)', marginTop: 4 }}>{ride.fare}</p>
                     </div>
-                  </div>
-                  <div className="flex items-center justify-between" style={{ borderTop: '1px solid var(--color-surface-container-low)', paddingTop: 10 }}>
-                    <div className="flex items-center gap-1.5">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-secondary)" strokeWidth="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-                      <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{ride.date} · {ride.time}</span>
+                    <div className="flex items-center justify-between" style={{ borderTop: '1px solid var(--color-surface-container-low)', paddingTop: 10 }}>
+                      <div className="flex items-center gap-1.5">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-secondary)" strokeWidth="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                        <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{new Date(ride.scheduledAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{ride.riderName} · {ride.driverName}</span>
                     </div>
-                    <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{ride.driver}</span>
+                    {ride.status === 'driver_cancelled' && (
+                      <p style={{ fontSize: 12, color: 'var(--color-error)', marginTop: 8 }}>{ride.cancellationReason ?? 'The driver cancelled this ride.'} Please reschedule below.</p>
+                    )}
+                    {ride.status === 'scheduled' && (
+                      <button onClick={() => handleCancel(ride.id)} style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: 'var(--color-error)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Cancel</button>
+                    )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </section>
         )}
@@ -192,6 +261,25 @@ export default function ScheduledRidesPage() {
         <div style={{ marginBottom: 16 }}>
           <MiniCalendar selectedDate={selectedDate} onSelect={setSelectedDate} />
         </div>
+
+        {/* Riding for (family members) */}
+        {familyMembers.length > 0 && (
+          <div style={{ background: 'white', border: '1px solid rgba(241,245,249,1)', borderRadius: 14, padding: 16, marginBottom: 12, boxShadow: '0 4px 20px rgba(26,43,60,0.05)' }}>
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface-variant)', marginBottom: 12 }}>Who is this ride for?</p>
+            <div className="flex gap-2 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+              <button onClick={() => setRidingFor('self')}
+                style={{ flexShrink: 0, padding: '8px 14px', borderRadius: 9999, border: '2px solid', borderColor: ridingFor === 'self' ? 'var(--color-primary-container)' : 'transparent', background: ridingFor === 'self' ? 'var(--color-surface-container-low)' : '#F8F9FA', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                Myself
+              </button>
+              {familyMembers.map(m => (
+                <button key={m.memberUserId} onClick={() => setRidingFor(m.memberUserId)}
+                  style={{ flexShrink: 0, padding: '8px 14px', borderRadius: 9999, border: '2px solid', borderColor: ridingFor === m.memberUserId ? 'var(--color-primary-container)' : 'transparent', background: ridingFor === m.memberUserId ? 'var(--color-surface-container-low)' : '#F8F9FA', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                  {m.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Pickup Input */}
         <div style={{ position: 'relative', marginBottom: 12 }}>
@@ -235,10 +323,13 @@ export default function ScheduledRidesPage() {
         <div style={{ background: 'white', border: '1px solid rgba(241,245,249,1)', borderRadius: 14, padding: 16, marginBottom: 4, boxShadow: '0 4px 20px rgba(26,43,60,0.05)' }}>
           <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface-variant)', marginBottom: 12 }}>Preferred Driver (Optional)</p>
           <div className="flex gap-3 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
-            {NEARBY_DRIVERS.map(d => {
-              const isSelected = selectedDriver === d.id
+            {preferredDrivers.length === 0 && (
+              <p style={{ fontSize: 12, color: 'var(--color-secondary)' }}>No active preferred drivers yet.</p>
+            )}
+            {preferredDrivers.map(d => {
+              const isSelected = selectedDriver === d.driverId
               return (
-                <button key={d.id} onClick={() => setSelectedDriver(isSelected ? null : d.id)}
+                <button key={d.driverId} onClick={() => setSelectedDriver(isSelected ? 'any' : d.driverId)}
                   style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 10, border: '2px solid', borderColor: isSelected ? 'var(--color-primary-container)' : 'transparent', background: isSelected ? 'var(--color-surface-container-low)' : '#F8F9FA', cursor: 'pointer', transition: 'all 0.15s' }}>
                   <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
                     {d.avatar}
@@ -265,22 +356,21 @@ export default function ScheduledRidesPage() {
             </button>
           </div>
         </div>
+
+        {scheduleError && (
+          <p style={{ fontSize: 13, color: 'var(--color-error)', marginTop: 12 }}>{scheduleError}</p>
+        )}
       </main>
 
       {/* Sticky CTA */}
       <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '16px 20px 32px', background: 'linear-gradient(to top, var(--color-surface) 70%, transparent)', zIndex: 30 }}>
         <div style={{ maxWidth: 480, margin: '0 auto' }}>
           <button onClick={handleSchedule} disabled={scheduling}
-            style={{ width: '100%', height: 56, background: scheduled ? 'var(--color-primary-container)' : 'var(--color-primary)', color: scheduled ? 'var(--color-on-primary-container)' : 'white', borderRadius: 14, border: 'none', fontSize: 16, fontWeight: 700, cursor: scheduling ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, boxShadow: '0 4px 16px rgba(0,109,55,0.25)', transition: 'all 0.2s', opacity: scheduling ? 0.8 : 1 }}>
+            style={{ width: '100%', height: 56, background: 'var(--color-primary)', color: 'white', borderRadius: 14, border: 'none', fontSize: 16, fontWeight: 700, cursor: scheduling ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, boxShadow: '0 4px 16px rgba(0,109,55,0.25)', transition: 'all 0.2s', opacity: scheduling ? 0.8 : 1 }}>
             {scheduling ? (
               <>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.3"/><path d="M21 12a9 9 0 00-9-9" strokeLinecap="round"/></svg>
                 Scheduling...
-              </>
-            ) : scheduled ? (
-              <>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="var(--color-on-primary-container)" strokeWidth="2.5" strokeLinecap="round"/></svg>
-                Ride Scheduled!
               </>
             ) : (
               <>

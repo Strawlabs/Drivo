@@ -7,8 +7,10 @@ import BookRidePage from '@/pages/rider/BookRidePage'
 import ActiveRidePage from '@/pages/rider/ActiveRidePage'
 import RideCompletePage from '@/pages/rider/RideCompletePage'
 import ScheduledRidesPage from '@/pages/rider/ScheduledRidesPage'
+import FamilyPage from '@/pages/rider/FamilyPage'
 import DriverHomePage from '@/pages/driver/HomePage'
 import DriverVerificationPage from '@/pages/driver/VerificationPage'
+import DriverSubscriptionPage from '@/pages/driver/SubscriptionPage'
 import AdminDashboardPage from '@/pages/admin/DashboardPage'
 
 /* ── Shared loading spinner ───────────────────────────────── */
@@ -103,10 +105,12 @@ function AppRoutes() {
       <Route path="/rider/active-ride"   element={<RoleRoute allowedRole="rider"><ActiveRidePage /></RoleRoute>} />
       <Route path="/rider/ride-complete" element={<RoleRoute allowedRole="rider"><RideCompletePage /></RoleRoute>} />
       <Route path="/rider/schedule"      element={<RoleRoute allowedRole="rider"><ScheduledRidesPage /></RoleRoute>} />
+      <Route path="/rider/family"        element={<RoleRoute allowedRole="rider"><FamilyPage /></RoleRoute>} />
 
       {/* Driver pages */}
       <Route path="/driver/home"         element={<RoleRoute allowedRole="driver"><DriverHomePage /></RoleRoute>} />
       <Route path="/driver/verification" element={<RoleRoute allowedRole="driver"><DriverVerificationPage /></RoleRoute>} />
+      <Route path="/driver/subscription" element={<RoleRoute allowedRole="driver"><DriverSubscriptionPage /></RoleRoute>} />
 
       {/* Admin pages */}
       <Route path="/admin/dashboard" element={<RoleRoute allowedRole="admin"><AdminDashboardPage /></RoleRoute>} />
