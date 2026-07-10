@@ -6,6 +6,7 @@ import { fetchDriverEarnings, summarizeForPeriod, bucketTrend, buildEarningsRepo
 import { HOME_ZONES, validateGoHomeInput, activateGoHome, deactivateGoHome, fetchActiveGoHomeSession, matchGoHomeRide, toLocalDatetimeInputValue } from '@/lib/goHome'
 import { fetchPreferredRidersForDriver, approvePreferredRider, declinePreferredRider, blockPreferredRider } from '@/lib/preferredDrivers'
 import { hasQualifyingTier, checkAndUpdateSubscriptionStatus } from '@/lib/subscriptions'
+import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
 
 // ── Mock data ──────────────────────────────────────────────────
 const DISCOVERY_DRIVERS = [
@@ -771,6 +772,7 @@ export default function DriverHomePage() {
   const [subscription, setSubscription] = useState(null)
   const [goHomeSession, setGoHomeSession] = useState(null)
   const [showGoHomeModal, setShowGoHomeModal] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
   const [goHomeMatch, setGoHomeMatch] = useState(null)
   const [showPreferredRiders, setShowPreferredRiders] = useState(false)
 
@@ -898,6 +900,13 @@ export default function DriverHomePage() {
     if (!driverProfileId) return
     fetchActiveGoHomeSession(driverProfileId).then(setGoHomeSession)
   }, [driverProfileId])
+
+  useEffect(() => {
+    if (!user) return
+    fetchUnreadCount(user.id).then(setUnreadCount).catch(() => {})
+    const unsubscribe = subscribeToNotifications(user.id, () => setUnreadCount(c => c + 1))
+    return unsubscribe
+  }, [user])
 
   useEffect(() => {
     if (!goHomeSession) return
@@ -1100,7 +1109,12 @@ export default function DriverHomePage() {
           <span style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)', letterSpacing: '-0.01em' }}>Drivo</span>
         </div>
         <div className="flex items-center gap-3">
-          <button style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 20 }}>🔔</button>
+          <button onClick={() => navigate('/driver/notifications')} className="relative" style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 20 }}>
+            🔔
+            {unreadCount > 0 && (
+              <span style={{ position: 'absolute', top: 4, right: 4, width: 8, height: 8, borderRadius: '50%', background: 'var(--color-error)' }} />
+            )}
+          </button>
           <div className="flex items-center justify-center text-white font-semibold text-sm flex-shrink-0" style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid var(--color-primary-container)' }}>
             {displayName[0]}
           </div>

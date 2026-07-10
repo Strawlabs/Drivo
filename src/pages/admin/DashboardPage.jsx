@@ -147,11 +147,155 @@ function SubscriptionAdminPanel() {
   )
 }
 
+const INCIDENT_STATUS_COLOR = {
+  open: { bg: 'rgba(186,26,26,0.08)', color: '#ba1a1a' },
+  reviewing: { bg: '#e5eeff', color: '#4f6073' },
+  resolved: { bg: 'rgba(46,204,113,0.12)', color: '#006d37' },
+}
+
+function SafetyAdminPanel() {
+  const [incidents, setIncidents] = useState([])
+  const [sosEvents, setSosEvents] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [savingId, setSavingId] = useState(null)
+  const [notesDraft, setNotesDraft] = useState({})
+  const { user } = useAuth()
+
+  async function load() {
+    setLoading(true)
+    const [{ data: inc }, { data: sos }] = await Promise.all([
+      supabase.from('incident_reports').select('*, users:reported_by(name, phone), rides(pickup_address, destination_address)').order('created_at', { ascending: false }),
+      supabase.from('sos_events').select('*, rides(pickup_address, destination_address), users:triggered_by(name, phone)').order('created_at', { ascending: false }),
+    ])
+    setIncidents(inc ?? [])
+    setSosEvents(sos ?? [])
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function updateStatus(id, status) {
+    setSavingId(id)
+    await supabase.from('incident_reports').update({
+      status,
+      resolution_notes: notesDraft[id] ?? null,
+      reviewed_by: user?.id ?? null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', id)
+    await load()
+    setSavingId(null)
+  }
+
+  async function resolveSosEvent(id) {
+    setSavingId(id)
+    await supabase.from('sos_events').update({ resolved_at: new Date().toISOString() }).eq('id', id)
+    await load()
+    setSavingId(null)
+  }
+
+  if (loading) return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
+
+  const openCount = incidents.filter(i => i.status === 'open').length
+  const activeSosCount = sosEvents.filter(s => !s.resolved_at).length
+
+  return (
+    <>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 28 }}>
+        {[
+          { label: 'Open Incidents', value: openCount, icon: 'report' },
+          { label: 'Active SOS Events', value: activeSosCount, icon: 'emergency_home' },
+          { label: 'Total Reports', value: incidents.length, icon: 'assignment' },
+        ].map(card => (
+          <div key={card.label} style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, padding: 24, boxShadow: '0 4px 20px rgba(26,43,60,0.05)' }}>
+            <div style={{ padding: 10, background: card.label === 'Active SOS Events' && activeSosCount > 0 ? 'rgba(186,26,26,0.12)' : '#d2e4fb', borderRadius: 12, display: 'inline-flex', marginBottom: 12 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 22, color: card.label === 'Active SOS Events' && activeSosCount > 0 ? '#ba1a1a' : '#4f6073' }}>{card.icon}</span>
+            </div>
+            <p style={{ fontSize: 13, color: '#4f6073', marginBottom: 4 }}>{card.label}</p>
+            <h3 style={{ fontSize: 28, fontWeight: 600, color: '#0b1c30', margin: 0 }}>{card.value}</h3>
+          </div>
+        ))}
+      </section>
+
+      <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden', marginBottom: 28 }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>SOS Events</h2>
+          <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3 }}>Audit log of every rider-triggered emergency.</p>
+        </div>
+        <div style={{ padding: '8px 24px 20px' }}>
+          {sosEvents.length === 0 && <p style={{ fontSize: 13, color: '#4f6073', padding: '12px 0' }}>No SOS events recorded.</p>}
+          {sosEvents.map(s => (
+            <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0', borderTop: '1px solid #e5eeff' }}>
+              <div>
+                <p style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>{s.users?.name ?? 'Unknown'} · {s.users?.phone}</p>
+                <p style={{ fontSize: 12, color: '#4f6073' }}>{s.rides?.pickup_address ?? '—'} → {s.rides?.destination_address ?? '—'} · {new Date(s.created_at).toLocaleString('en-IN')}</p>
+              </div>
+              {s.resolved_at ? (
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#006d37', background: 'rgba(46,204,113,0.12)', padding: '4px 12px', borderRadius: 8 }}>Resolved</span>
+              ) : (
+                <button onClick={() => resolveSosEvent(s.id)} disabled={savingId === s.id}
+                  style={{ padding: '6px 16px', border: 'none', borderRadius: 8, background: '#ba1a1a', color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  Mark Resolved
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden' }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>Incident Reports</h2>
+          <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3 }}>Review and resolve rider-submitted reports.</p>
+        </div>
+        <div style={{ padding: '8px 24px 20px' }}>
+          {incidents.length === 0 && <p style={{ fontSize: 13, color: '#4f6073', padding: '12px 0' }}>No incident reports submitted.</p>}
+          {incidents.map(i => {
+            const colors = INCIDENT_STATUS_COLOR[i.status] ?? INCIDENT_STATUS_COLOR.open
+            return (
+              <div key={i.id} style={{ padding: '14px 0', borderTop: '1px solid #e5eeff' }}>
+                <div className="flex justify-between items-start" style={{ marginBottom: 6 }}>
+                  <div>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>{i.users?.name ?? 'Unknown'} · {i.category}</p>
+                    <p style={{ fontSize: 12, color: '#4f6073' }}>{i.rides?.pickup_address ?? '—'} → {i.rides?.destination_address ?? '—'} · {new Date(i.created_at).toLocaleString('en-IN')}</p>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: colors.color, background: colors.bg, padding: '3px 10px', borderRadius: 6, whiteSpace: 'nowrap' }}>{i.status}</span>
+                </div>
+                <p style={{ fontSize: 13, color: '#0b1c30', marginBottom: 8 }}>{i.description}</p>
+                {i.status !== 'resolved' && (
+                  <div className="flex gap-2 items-center">
+                    <input placeholder="Resolution notes (optional)" defaultValue={notesDraft[i.id] ?? i.resolution_notes ?? ''}
+                      onChange={e => setNotesDraft(prev => ({ ...prev, [i.id]: e.target.value }))}
+                      style={{ flex: 1, height: 32, padding: '0 10px', border: '1px solid #bbcbbb', borderRadius: 6, fontSize: 12 }} />
+                    {i.status === 'open' && (
+                      <button onClick={() => updateStatus(i.id, 'reviewing')} disabled={savingId === i.id}
+                        style={{ padding: '6px 14px', border: '1px solid #6c7b6d', borderRadius: 8, background: 'none', color: '#3d4a3e', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        Mark Reviewing
+                      </button>
+                    )}
+                    <button onClick={() => updateStatus(i.id, 'resolved')} disabled={savingId === i.id}
+                      style={{ padding: '6px 14px', border: 'none', borderRadius: 8, background: '#006d37', color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      Resolve
+                    </button>
+                  </div>
+                )}
+                {i.status === 'resolved' && i.resolution_notes && (
+                  <p style={{ fontSize: 12, color: '#4f6073', fontStyle: 'italic' }}>Resolution: {i.resolution_notes}</p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </section>
+    </>
+  )
+}
+
 const NAV = [
   { icon: 'payments',   label: 'Earnings' },
   { icon: 'home_pin',   label: 'Go Home Mode' },
   { icon: 'analytics',  label: 'Analytics', active: true },
   { icon: 'loyalty',    label: 'Subscription' },
+  { icon: 'shield',     label: 'Safety' },
   { icon: 'ads_click',  label: 'Ads' },
   { icon: 'settings',   label: 'Settings' },
 ]
@@ -294,6 +438,8 @@ export default function AdminDashboardPage() {
 
         {activeNav === 'Subscription' ? (
           <SubscriptionAdminPanel />
+        ) : activeNav === 'Safety' ? (
+          <SafetyAdminPanel />
         ) : (
         <>
         {/* KPI Cards */}

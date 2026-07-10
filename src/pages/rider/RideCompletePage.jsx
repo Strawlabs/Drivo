@@ -5,6 +5,7 @@ import { useAuth } from '@/hooks/useAuth.jsx'
 import { buildUpiLink, initiateUpiPayment, confirmUpiPayment, failUpiPayment, payCash, generateReceipt } from '@/lib/payments'
 import { recalculateDriverRating } from '@/lib/drivers'
 import { fetchSubscriptionTier, ELIGIBLE_TIERS, savePreferredDriver } from '@/lib/preferredDrivers'
+import { submitIncidentReport } from '@/lib/safety'
 
 const BADGES = ['Clean Car', 'Expert Driving', 'Great Chat', 'On Time', 'Safe Driver']
 const UPI_TIMEOUT_SECONDS = 120
@@ -39,6 +40,13 @@ export default function RideCompletePage() {
   const [savedDriverStatus, setSavedDriverStatus] = useState(null) // null | 'pending' | 'active' | 'blocked_by_driver'
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
+
+  const [showIncidentForm, setShowIncidentForm] = useState(false)
+  const [incidentCategory, setIncidentCategory] = useState('safety')
+  const [incidentDescription, setIncidentDescription] = useState('')
+  const [incidentSubmitting, setIncidentSubmitting] = useState(false)
+  const [incidentSubmitted, setIncidentSubmitted] = useState(false)
+  const [incidentError, setIncidentError] = useState(null)
 
   const fare = ride?.final_fare ?? location.state?.fare ?? 284
 
@@ -161,6 +169,25 @@ export default function RideCompletePage() {
 
   function toggleBadge(b) {
     setBadges(prev => prev.includes(b) ? prev.filter(x => x !== b) : [...prev, b])
+  }
+
+  async function handleSubmitIncident() {
+    if (incidentSubmitting || !user || !incidentDescription.trim()) return
+    setIncidentSubmitting(true)
+    setIncidentError(null)
+    try {
+      await submitIncidentReport({
+        rideId,
+        reportedBy: user.id,
+        category: incidentCategory,
+        description: incidentDescription.trim(),
+      })
+      setIncidentSubmitted(true)
+    } catch (err) {
+      setIncidentError(err.message)
+    } finally {
+      setIncidentSubmitting(false)
+    }
   }
 
   async function handlePayUpi() {
@@ -514,6 +541,43 @@ export default function RideCompletePage() {
             )}
           </section>
         )}
+
+        {/* Report an Issue */}
+        <section style={{ marginBottom: 20 }}>
+          {!showIncidentForm && !incidentSubmitted && (
+            <button onClick={() => setShowIncidentForm(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--color-error)', fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>report</span>
+              Report an Issue
+            </button>
+          )}
+          {incidentSubmitted && (
+            <p style={{ fontSize: 13, color: 'var(--color-primary)', fontWeight: 600 }}>✓ Your report has been submitted and will be reviewed.</p>
+          )}
+          {showIncidentForm && !incidentSubmitted && (
+            <div style={{ background: 'white', border: '1px solid rgba(241,245,249,1)', borderRadius: 14, padding: 16, boxShadow: '0 2px 8px rgba(26,43,60,0.05)' }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 10 }}>Report an Issue</p>
+              <select value={incidentCategory} onChange={e => setIncidentCategory(e.target.value)}
+                style={{ width: '100%', height: 40, padding: '0 10px', background: '#F8F9FA', border: 'none', borderRadius: 10, fontSize: 13, marginBottom: 8 }}>
+                <option value="safety">Safety concern</option>
+                <option value="driver_behavior">Driver behavior</option>
+                <option value="payment">Payment issue</option>
+                <option value="vehicle">Vehicle condition</option>
+                <option value="other">Other</option>
+              </select>
+              <textarea value={incidentDescription} onChange={e => setIncidentDescription(e.target.value)} placeholder="Describe what happened…" rows={3}
+                style={{ width: '100%', padding: 10, background: '#F8F9FA', border: 'none', borderRadius: 10, fontSize: 13, marginBottom: 8, boxSizing: 'border-box', fontFamily: 'var(--font-sans)', resize: 'vertical' }} />
+              {incidentError && <p style={{ fontSize: 12, color: 'var(--color-error)', marginBottom: 8 }}>{incidentError}</p>}
+              <div className="flex gap-3">
+                <button onClick={() => setShowIncidentForm(false)} style={{ flex: 1, height: 40, background: 'none', border: '1px solid var(--color-outline-variant)', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                <button onClick={handleSubmitIncident} disabled={incidentSubmitting || !incidentDescription.trim()}
+                  style={{ flex: 1, height: 40, background: 'var(--color-error)', color: 'white', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer', opacity: incidentSubmitting || !incidentDescription.trim() ? 0.6 : 1 }}>
+                  {incidentSubmitting ? 'Submitting…' : 'Submit'}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
 
         {!existingRating && (
           <>

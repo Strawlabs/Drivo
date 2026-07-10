@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
+import { notifyDriverProfile } from '@/lib/notifications'
 
 const VEHICLE_OPTIONS = [
   { id: 'luxe',  label: 'Drivo Luxe',  sub: 'EV Sedan · 4 min',  icon: 'electric_car',      fare: 284 },
@@ -38,6 +39,16 @@ export default function BookRidePage() {
         status: 'requested',
       }).select().single()
       if (error) throw error
+
+      if (driver.id) {
+        notifyDriverProfile(driver.id, {
+          category: 'driver_request',
+          title: 'New ride request',
+          body: `A rider wants a ride from ${pickup} to ${destination}.`,
+          data: { rideId: data.id },
+        }).catch(() => {})
+      }
+
       navigate('/rider/active-ride', { state: { rideId: data.id, driver, fare, pickup, destination, rideStatus: 'requested' } })
     } catch (err) {
       alert('Could not create ride: ' + err.message)

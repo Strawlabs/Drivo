@@ -608,3 +608,163 @@ create policy "preferred_drivers_update_own"
   );
 
 create index if not exists driver_subscriptions_driver_idx on public.driver_subscriptions (driver_id, status);
+
+-- ============================================================
+-- NOTIFICATIONS & SAFETY TOOLS TASK
+--
+-- No Firebase project/credentials exist anywhere in this codebase,
+-- and real push delivery to a closed app needs a server-side trigger
+-- (this project has no custom backend beyond Supabase). Scope
+-- decision (asked user, given this is for a real company): build a
+-- fully real in-app Notification Center now (every production ride
+-- app has one regardless of push), backed by Supabase Realtime for
+-- live updates while the app is open. Real FCM push is a clean,
+-- separate follow-up once a Firebase project + service account +
+-- an Edge Function trigger exist — not faked with placeholder keys.
+--
+-- Same reasoning for SOS: no SMS provider exists, so "emergency
+-- contacts are notified" is a real sos_events audit row + one-tap
+-- tel:/sms: links the rider fires from their own phone (a real,
+-- shipped pattern at MVP-stage ride companies), plus a genuine
+-- in-app notification for any contact who happens to already have a
+-- Drivo account. Real backend-triggered SMS (Twilio) is the natural
+-- next step once those credentials exist.
+--
+-- sos_events had RLS disabled entirely since it was first created
+-- (same recurring gap as every other new table in this project).
+-- ============================================================
+
+alter table public.sos_events enable row level security;
+
+create policy "sos_events_select_own_or_admin"
+  on public.sos_events for select
+  using (
+    auth.uid() = triggered_by
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+create policy "sos_events_insert_own"
+  on public.sos_events for insert
+  with check (auth.uid() = triggered_by);
+
+-- Only admins resolve an SOS event — the rider who triggered it
+-- shouldn't be able to mark their own emergency "handled".
+create policy "sos_events_update_admin_only"
+  on public.sos_events for update
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- Scheduled-ride reminders: track whether the reminder for a given
+-- row has already fired, so the client-side due-check poll doesn't
+-- re-send it every time it runs.
+alter table public.scheduled_rides add column if not exists reminder_sent_at timestamptz;
+
+-- ============================================================
+-- SHARED TRIP LINKS
+--
+-- The recipient of a shared trip link is explicitly NOT expected to
+-- be a Drivo account (sharing with a family member who isn't a rider
+-- is the real use case) — access control is the token itself, not a
+-- login. A blanket "select using (true)" policy would let anyone list
+-- every shared link (and every ride's pickup/destination) platform-
+-- wide via a plain unfiltered REST query, which is exactly the
+-- "avoid exposing trip links to unauthorized users" failure mode this
+-- task calls out. So the table itself stays owner-scoped, and public
+-- access goes through a SECURITY DEFINER function that only returns
+-- data when the exact token matches — the standard, secure pattern
+-- for magic-link-style access with Postgres RLS.
+-- ============================================================
+
+create table public.shared_trip_links (
+  id uuid primary key default gen_random_uuid(),
+  ride_id uuid not null references public.rides(id),
+  token text not null unique,
+  created_by uuid not null references public.users(id),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default (now() + interval '24 hours')
+);
+
+alter table public.shared_trip_links enable row level security;
+
+create policy "shared_trip_links_select_own"
+  on public.shared_trip_links for select
+  using (auth.uid() = created_by);
+
+create policy "shared_trip_links_insert_own"
+  on public.shared_trip_links for insert
+  with check (auth.uid() = created_by);
+
+-- Returns only what a trip-share recipient needs to see (driver name,
+-- vehicle, status, pickup/destination) — never the rider's identity,
+-- and nothing at all if the token is wrong, expired, or unmatched.
+create or replace function public.get_shared_trip(p_token text)
+returns table (
+  ride_status text,
+  pickup_address text,
+  destination_address text,
+  driver_name text,
+  vehicle_label text,
+  expires_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    r.status,
+    r.pickup_address,
+    r.destination_address,
+    u.name,
+    trim(concat_ws(' ', v.make, v.model)),
+    l.expires_at
+  from public.shared_trip_links l
+  join public.rides r on r.id = l.ride_id
+  left join public.driver_profiles dp on dp.id = r.driver_id
+  left join public.users u on u.id = dp.user_id
+  left join public.vehicles v on v.id = r.vehicle_id
+  where l.token = p_token
+    and l.expires_at > now();
+$$;
+
+grant execute on function public.get_shared_trip(text) to anon, authenticated;
+
+-- ============================================================
+-- INCIDENT REPORTS
+-- ============================================================
+
+create table public.incident_reports (
+  id uuid primary key default gen_random_uuid(),
+  ride_id uuid references public.rides(id),
+  reported_by uuid not null references public.users(id),
+  category text not null check (category in ('safety', 'driver_behavior', 'payment', 'vehicle', 'other')),
+  description text not null,
+  status text not null default 'open' check (status in ('open', 'reviewing', 'resolved')),
+  reviewed_by uuid references public.users(id),
+  resolution_notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.incident_reports enable row level security;
+
+create policy "incident_reports_select_own_or_admin"
+  on public.incident_reports for select
+  using (
+    auth.uid() = reported_by
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+create policy "incident_reports_insert_own"
+  on public.incident_reports for insert
+  with check (auth.uid() = reported_by);
+
+-- Once submitted, only an admin moves it through the review workflow —
+-- the reporter can't quietly edit their own report or mark it resolved.
+create policy "incident_reports_update_admin_only"
+  on public.incident_reports for update
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+create index if not exists shared_trip_links_token_idx on public.shared_trip_links (token);
+create index if not exists incident_reports_reported_by_idx on public.incident_reports (reported_by, status);
+create index if not exists sos_events_triggered_by_idx on public.sos_events (triggered_by);

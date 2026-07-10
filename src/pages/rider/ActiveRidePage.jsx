@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchAvailableDrivers } from '@/lib/drivers'
+import { notifyDriverProfile } from '@/lib/notifications'
+import { triggerSos, createSharedTripLink } from '@/lib/safety'
 
 export default function ActiveRidePage() {
   const navigate = useNavigate()
@@ -21,6 +23,11 @@ export default function ActiveRidePage() {
   const [progress, setProgress] = useState(30)
   const [cancelling, setCancelling] = useState(false)
   const [alternates, setAlternates] = useState([])
+  const [driverPhone, setDriverPhone] = useState(null)
+  const [sosPanel, setSosPanel] = useState(null) // null | 'confirm' | { contacts }
+  const [triggeringSos, setTriggeringSos] = useState(false)
+  const [sharePanel, setSharePanel] = useState(null) // null | { url }
+  const [sharing, setSharing] = useState(false)
   const fareRef = useRef(fare)
   fareRef.current = fare
 
@@ -69,6 +76,51 @@ export default function ActiveRidePage() {
     return () => supabase.removeChannel(channel)
   }, [rideId])
 
+  useEffect(() => {
+    if (!driver.id) return
+    supabase.from('driver_profiles').select('users(phone)').eq('id', driver.id).maybeSingle()
+      .then(({ data }) => setDriverPhone(data?.users?.phone ?? null))
+  }, [driver.id])
+
+  async function handleTriggerSos() {
+    if (triggeringSos || !rideId || !user) return
+    setTriggeringSos(true)
+    try {
+      let coords = { latitude: null, longitude: null }
+      if (navigator.geolocation) {
+        coords = await new Promise(resolve => {
+          navigator.geolocation.getCurrentPosition(
+            pos => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+            () => resolve({ latitude: null, longitude: null }),
+            { timeout: 3000 }
+          )
+        })
+      }
+      const { contacts } = await triggerSos({ rideId, userId: user.id, ...coords })
+      setSosPanel({ contacts })
+    } catch (err) {
+      alert('Could not trigger SOS: ' + err.message)
+    } finally {
+      setTriggeringSos(false)
+    }
+  }
+
+  async function handleShareTrip() {
+    if (sharing || !rideId || !user) return
+    setSharing(true)
+    try {
+      const { url } = await createSharedTripLink({ rideId, userId: user.id })
+      if (navigator.share) {
+        await navigator.share({ title: 'Track my Drivo ride', url }).catch(() => {})
+      }
+      setSharePanel({ url })
+    } catch (err) {
+      alert('Could not create share link: ' + err.message)
+    } finally {
+      setSharing(false)
+    }
+  }
+
   async function handleCancel() {
     if (cancelling) return
     setCancelling(true)
@@ -95,6 +147,16 @@ export default function ActiveRidePage() {
         status: 'requested',
       }).select().single()
       if (error) throw error
+
+      if (altDriver.id) {
+        notifyDriverProfile(altDriver.id, {
+          category: 'driver_request',
+          title: 'New ride request',
+          body: `A rider wants a ride from ${pickup} to ${destination}.`,
+          data: { rideId: data.id },
+        }).catch(() => {})
+      }
+
       navigate('/rider/active-ride', {
         state: { rideId: data.id, driver: altDriver, fare: initialFare, pickup, destination, rideStatus: 'requested' },
         replace: true,
@@ -251,11 +313,71 @@ export default function ActiveRidePage() {
 
       {/* Floating SOS */}
       <div style={{ position:'fixed', top:72, left:20, zIndex:40 }}>
-        <button style={{ display:'flex', alignItems:'center', gap:6, background:'var(--color-error)', color:'white', padding:'8px 16px', borderRadius:9999, border:'none', fontSize:13, fontWeight:700, cursor:'pointer', boxShadow:'0 4px 16px rgba(186,26,26,0.35)' }}>
+        <button onClick={() => setSosPanel('confirm')}
+          style={{ display:'flex', alignItems:'center', gap:6, background:'var(--color-error)', color:'white', padding:'8px 16px', borderRadius:9999, border:'none', fontSize:13, fontWeight:700, cursor:'pointer', boxShadow:'0 4px 16px rgba(186,26,26,0.35)' }}>
           <span className="material-symbols-outlined" style={{ fontSize:18, fontVariationSettings:"'FILL' 1" }}>emergency_home</span>
           SOS
         </button>
       </div>
+
+      {/* SOS confirm / result panel */}
+      {sosPanel && (
+        <div style={{ position:'fixed', inset:0, zIndex:100, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'flex-end' }}>
+          <div style={{ width:'100%', background:'var(--color-surface)', borderTopLeftRadius:24, borderTopRightRadius:24, padding:'24px 20px 32px' }}>
+            {sosPanel === 'confirm' ? (
+              <>
+                <h3 style={{ fontSize:18, fontWeight:700, color:'var(--color-error)', marginBottom:8 }}>Trigger SOS?</h3>
+                <p style={{ fontSize:14, color:'var(--color-secondary)', marginBottom:20 }}>This logs an emergency event on your ride and gives you one-tap links to alert your emergency contacts.</p>
+                <div className="flex gap-3">
+                  <button onClick={() => setSosPanel(null)} style={{ flex:1, height:48, background:'none', border:'1px solid var(--color-outline-variant)', borderRadius:12, fontSize:14, fontWeight:700, cursor:'pointer' }}>Cancel</button>
+                  <button onClick={handleTriggerSos} disabled={triggeringSos} style={{ flex:1, height:48, background:'var(--color-error)', color:'white', border:'none', borderRadius:12, fontSize:14, fontWeight:700, cursor:'pointer' }}>
+                    {triggeringSos ? 'Sending…' : 'Confirm SOS'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 style={{ fontSize:18, fontWeight:700, color:'var(--color-error)', marginBottom:4 }}>🚨 SOS logged</h3>
+                <p style={{ fontSize:14, color:'var(--color-secondary)', marginBottom:16 }}>Alert your emergency contacts now:</p>
+                {sosPanel.contacts.length === 0 ? (
+                  <p style={{ fontSize:13, color:'var(--color-secondary)', marginBottom:16 }}>No emergency contacts configured — add some from your Family Dashboard.</p>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
+                    {sosPanel.contacts.map(c => (
+                      <div key={c.phone} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', background:'var(--color-surface-container-low)', borderRadius:12, padding:'10px 14px' }}>
+                        <div>
+                          <p style={{ fontSize:14, fontWeight:600, color:'var(--color-on-surface)' }}>{c.name}</p>
+                          <p style={{ fontSize:12, color:'var(--color-secondary)' }}>{c.phone}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <a href={`tel:${c.phone}`} style={{ width:36, height:36, borderRadius:'50%', background:'var(--color-primary)', color:'white', display:'flex', alignItems:'center', justifyContent:'center', textDecoration:'none' }}>📞</a>
+                          <a href={`sms:${c.phone}?body=${encodeURIComponent('I need help — I triggered SOS on my Drivo ride. Please check on me.')}`} style={{ width:36, height:36, borderRadius:'50%', background:'var(--color-surface-container-high)', display:'flex', alignItems:'center', justifyContent:'center', textDecoration:'none' }}>💬</a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button onClick={() => setSosPanel(null)} style={{ width:'100%', height:48, background:'var(--color-on-surface)', color:'white', border:'none', borderRadius:12, fontSize:14, fontWeight:700, cursor:'pointer' }}>Done</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Share trip panel */}
+      {sharePanel && (
+        <div style={{ position:'fixed', inset:0, zIndex:100, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'flex-end' }} onClick={() => setSharePanel(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ width:'100%', background:'var(--color-surface)', borderTopLeftRadius:24, borderTopRightRadius:24, padding:'24px 20px 32px' }}>
+            <h3 style={{ fontSize:18, fontWeight:700, color:'var(--color-on-surface)', marginBottom:8 }}>Share this trip</h3>
+            <p style={{ fontSize:14, color:'var(--color-secondary)', marginBottom:16 }}>Anyone with this link can see live trip status — no login needed. It expires in 24 hours.</p>
+            <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+              <input readOnly value={sharePanel.url} style={{ flex:1, height:44, padding:'0 12px', background:'var(--color-surface-container-low)', border:'none', borderRadius:10, fontSize:12, color:'var(--color-on-surface)' }} />
+              <button onClick={() => navigator.clipboard?.writeText(sharePanel.url)} style={{ height:44, padding:'0 16px', background:'var(--color-primary)', color:'white', border:'none', borderRadius:10, fontSize:13, fontWeight:700, cursor:'pointer' }}>Copy</button>
+            </div>
+            <button onClick={() => setSharePanel(null)} style={{ width:'100%', height:48, background:'none', border:'1px solid var(--color-outline-variant)', borderRadius:12, fontSize:14, fontWeight:700, cursor:'pointer' }}>Close</button>
+          </div>
+        </div>
+      )}
 
       {/* Map controls */}
       <div style={{ position:'fixed', top:72, right:20, zIndex:40, display:'flex', flexDirection:'column', gap:8 }}>
@@ -327,11 +449,13 @@ export default function ActiveRidePage() {
 
         {/* Actions */}
         <div className="px-5 pb-8 flex gap-3">
-          <button style={{ flex:1, height:48, background:'var(--color-on-surface)', color:'white', border:'none', borderRadius:12, fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6, cursor:'pointer' }}>
+          <button onClick={() => driverPhone && (window.location.href = `tel:${driverPhone}`)} disabled={!driverPhone}
+            style={{ flex:1, height:48, background:'var(--color-on-surface)', color:'white', border:'none', borderRadius:12, fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6, cursor:driverPhone ? 'pointer' : 'default', opacity:driverPhone ? 1 : 0.6 }}>
             <span className="material-symbols-outlined" style={{ fontSize:18 }}>chat_bubble</span>
             Contact
           </button>
-          <button style={{ flex:1, height:48, background:'var(--color-surface-container-high)', color:'var(--color-on-surface)', border:'none', borderRadius:12, fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6, cursor:'pointer' }}>
+          <button onClick={handleShareTrip} disabled={sharing}
+            style={{ flex:1, height:48, background:'var(--color-surface-container-high)', color:'var(--color-on-surface)', border:'none', borderRadius:12, fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6, cursor:'pointer' }}>
             <span className="material-symbols-outlined" style={{ fontSize:18 }}>share</span>
             Share Ride
           </button>

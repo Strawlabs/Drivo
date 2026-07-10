@@ -4,7 +4,8 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchAvailableDrivers } from '@/lib/drivers'
 import { fetchPreferredDriversForRider, removePreferredDriver, fetchSubscriptionTier, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
-import { dispatchDueScheduledRides } from '@/lib/family'
+import { dispatchDueScheduledRides, sendDueReminders } from '@/lib/family'
+import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
 
 const PAST_TRIPS = [
   { id: 1, from: 'Koramangala 5th Block', to: 'MG Road Metro Station', date: 'Today, 9:14 AM',      fare: '₹184', distance: '6.2 km', duration: '18 mins', driver: 'Ramesh K.', rating: 5, status: 'completed' },
@@ -487,7 +488,7 @@ function DriversTab({ onBookDriver }) {
 }
 
 // ── TAB: Profile ────────────────────────────────────────────────
-function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpenFamily }) {
+function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpenFamily, onOpenNotifications }) {
   return (
     <div className="px-5 pt-6 pb-8">
       {/* Profile hero */}
@@ -528,7 +529,7 @@ function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpe
             { icon: '🚗', label: 'Preferred Drivers', onClick: onOpenPreferredDrivers },
             { icon: '👨‍👩‍👧', label: 'Family', onClick: onOpenFamily },
             { icon: '🌿', label: 'Eco Impact Report' },
-            { icon: '🔔', label: 'Notifications' },
+            { icon: '🔔', label: 'Notifications', onClick: onOpenNotifications },
           ]
         },
         {
@@ -686,6 +687,7 @@ export default function RiderHomePage() {
   const navigate = useNavigate()
   const [activeNav, setActiveNav] = useState('home')
   const [firstName, setFirstName] = useState('Rider')
+  const [unreadCount, setUnreadCount] = useState(0)
   const [showPreferredDrivers, setShowPreferredDrivers] = useState(false)
 
   useEffect(() => {
@@ -706,10 +708,19 @@ export default function RiderHomePage() {
   useEffect(() => {
     if (!user) return
     dispatchDueScheduledRides(user.id).catch(() => {})
+    sendDueReminders(user.id).catch(() => {})
     const interval = setInterval(() => {
       dispatchDueScheduledRides(user.id).catch(() => {})
+      sendDueReminders(user.id).catch(() => {})
     }, 60000)
     return () => clearInterval(interval)
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+    fetchUnreadCount(user.id).then(setUnreadCount).catch(() => {})
+    const unsubscribe = subscribeToNotifications(user.id, () => setUnreadCount(c => c + 1))
+    return unsubscribe
   }, [user])
 
   const hour = new Date().getHours()
@@ -731,7 +742,10 @@ export default function RiderHomePage() {
           </div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)', letterSpacing: '-0.01em' }}>Drivo</h1>
         </div>
-        <button className="flex items-center justify-center rounded-full" style={{ width: 48, height: 48 }}>
+        <button onClick={() => navigate('/rider/notifications')} className="relative flex items-center justify-center rounded-full" style={{ width: 48, height: 48 }}>
+          {unreadCount > 0 && (
+            <span style={{ position: 'absolute', top: 6, right: 8, width: 8, height: 8, borderRadius: '50%', background: 'var(--color-error)' }} />
+          )}
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
             <path d="M6 10a6 6 0 0112 0v4l2 2H4l2-2v-4z" stroke="var(--color-secondary)" strokeWidth="1.5" strokeLinejoin="round"/>
             <path d="M10 18a2 2 0 004 0" stroke="var(--color-secondary)" strokeWidth="1.5" strokeLinecap="round"/>
@@ -744,7 +758,7 @@ export default function RiderHomePage() {
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} />}
         {activeNav === 'trips'   && <TripsTab />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
-        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} />}
+        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} />}
       </main>
 
       {showPreferredDrivers && user && (
