@@ -1,6 +1,8 @@
 import { supabase } from '@/lib/supabase'
+import { notify, notifyDriverProfile } from '@/lib/notifications'
 
 export const SCHEDULE_MIN_LEAD_MINUTES = 10
+export const REMINDER_LEAD_MINUTES = 30
 
 // ── Family members ──────────────────────────────────────────────
 
@@ -275,13 +277,61 @@ export async function dispatchDueScheduledRides(userId) {
     if (rideError) continue
 
     await supabase.from('scheduled_rides').update({ status: 'dispatched', ride_id: ride.id }).eq('id', sr.id)
-    await supabase.from('notifications').insert({
-      user_id: sr.rider_id,
+    await notify({
+      userId: sr.rider_id,
       category: 'ride_alert',
       title: 'Scheduled ride starting',
       body: `Your scheduled ride to ${sr.destination_address} is now being requested.`,
-    })
+    }).catch(() => {})
+
+    if (sr.preferred_driver_id) {
+      await notifyDriverProfile(sr.preferred_driver_id, {
+        category: 'driver_request',
+        title: 'New ride request',
+        body: `A rider wants a ride from ${sr.pickup_address} to ${sr.destination_address}.`,
+        data: { rideId: ride.id },
+      }).catch(() => {})
+    }
+
     dispatched.push({ ...sr, rideId: ride.id })
   }
   return dispatched
+}
+
+/*
+  Reminder AC: "Riders and family members receive scheduled ride
+  reminders at configured times." Same client-side-poll shape as
+  dispatchDueScheduledRides — fires once per row (reminder_sent_at
+  guards against re-sending on every poll tick) when the ride is
+  within REMINDER_LEAD_MINUTES of its scheduled time but not yet due
+  for dispatch.
+*/
+export async function sendDueReminders(userId) {
+  const now = new Date()
+  const windowEnd = new Date(now.getTime() + REMINDER_LEAD_MINUTES * 60000)
+
+  const { data: due, error } = await supabase
+    .from('scheduled_rides')
+    .select('id, rider_id, pickup_address, destination_address, scheduled_at')
+    .eq('requested_by', userId)
+    .eq('status', 'scheduled')
+    .is('reminder_sent_at', null)
+    .gt('scheduled_at', now.toISOString())
+    .lte('scheduled_at', windowEnd.toISOString())
+  if (error) throw error
+  if (!due || due.length === 0) return []
+
+  const reminded = []
+  for (const sr of due) {
+    const when = new Date(sr.scheduled_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+    await notify({
+      userId: sr.rider_id,
+      category: 'ride_alert',
+      title: 'Upcoming ride reminder',
+      body: `Your ride to ${sr.destination_address} is scheduled for ${when} — pickup at ${sr.pickup_address}.`,
+    }).catch(() => {})
+    await supabase.from('scheduled_rides').update({ reminder_sent_at: new Date().toISOString() }).eq('id', sr.id)
+    reminded.push(sr.id)
+  }
+  return reminded
 }

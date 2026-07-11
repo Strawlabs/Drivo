@@ -12,6 +12,8 @@ import DriverHomePage from '@/pages/driver/HomePage'
 import DriverVerificationPage from '@/pages/driver/VerificationPage'
 import DriverSubscriptionPage from '@/pages/driver/SubscriptionPage'
 import AdminDashboardPage from '@/pages/admin/DashboardPage'
+import NotificationsPage from '@/pages/NotificationsPage'
+import SharedTripPage from '@/pages/SharedTripPage'
 
 /* ── Shared loading spinner ───────────────────────────────── */
 function Spinner() {
@@ -99,6 +101,9 @@ function AppRoutes() {
       {/* Registration — authenticated but no role yet */}
       <Route path="/register" element={<UnregisteredRoute><RegisterPage /></UnregisteredRoute>} />
 
+      {/* Shared trip link — deliberately public, no auth. Token is the access control. */}
+      <Route path="/trip/:token" element={<SharedTripPage />} />
+
       {/* Rider pages */}
       <Route path="/rider/home"          element={<RoleRoute allowedRole="rider"><RiderHomePage /></RoleRoute>} />
       <Route path="/rider/book-ride"     element={<RoleRoute allowedRole="rider"><BookRidePage /></RoleRoute>} />
@@ -106,11 +111,13 @@ function AppRoutes() {
       <Route path="/rider/ride-complete" element={<RoleRoute allowedRole="rider"><RideCompletePage /></RoleRoute>} />
       <Route path="/rider/schedule"      element={<RoleRoute allowedRole="rider"><ScheduledRidesPage /></RoleRoute>} />
       <Route path="/rider/family"        element={<RoleRoute allowedRole="rider"><FamilyPage /></RoleRoute>} />
+      <Route path="/rider/notifications" element={<RoleRoute allowedRole="rider"><NotificationsPage /></RoleRoute>} />
 
       {/* Driver pages */}
       <Route path="/driver/home"         element={<RoleRoute allowedRole="driver"><DriverHomePage /></RoleRoute>} />
       <Route path="/driver/verification" element={<RoleRoute allowedRole="driver"><DriverVerificationPage /></RoleRoute>} />
       <Route path="/driver/subscription" element={<RoleRoute allowedRole="driver"><DriverSubscriptionPage /></RoleRoute>} />
+      <Route path="/driver/notifications" element={<RoleRoute allowedRole="driver"><NotificationsPage /></RoleRoute>} />
 
       {/* Admin pages */}
       <Route path="/admin/dashboard" element={<RoleRoute allowedRole="admin"><AdminDashboardPage /></RoleRoute>} />
