@@ -1088,7 +1088,7 @@ export default function DriverHomePage() {
           </div>
         </div>
         <div className="flex flex-col gap-1" style={{ flex: 1 }}>
-          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode', onClick: () => { setShowGoHomeModal(true); setDrawerOpen(false) } }, { icon: '📊', label: 'Analytics' }, { icon: '⭐', label: 'Subscription', onClick: () => { setDrawerOpen(false); navigate('/driver/subscription') } }, { icon: '📣', label: 'Ads' }, { icon: '⚙️', label: 'Settings' }].map(({ icon, label, active, onClick }) => (
+          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode', onClick: () => { setShowGoHomeModal(true); setDrawerOpen(false) } }, { icon: '📊', label: 'Analytics' }, { icon: '⭐', label: 'Subscription', onClick: () => { setDrawerOpen(false); navigate('/driver/subscription') } }, { icon: '📣', label: 'Ads', onClick: () => { setDrawerOpen(false); navigate('/driver/ads') } }, { icon: '⚙️', label: 'Settings' }].map(({ icon, label, active, onClick }) => (
             <button key={label} onClick={onClick} className="flex items-center gap-4 text-left" style={{ padding: '10px 12px', borderRadius: 8, border: 'none', background: active ? 'var(--color-secondary-container)' : 'transparent', color: active ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)', fontSize: 16, fontWeight: active ? 700 : 400, cursor: onClick ? 'pointer' : 'default' }}>
               <span style={{ fontSize: 18 }}>{icon}</span>{label}
               {label === 'Go Home Mode' && goHomeSession && (

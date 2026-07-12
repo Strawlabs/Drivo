@@ -11,6 +11,7 @@ import FamilyPage from '@/pages/rider/FamilyPage'
 import DriverHomePage from '@/pages/driver/HomePage'
 import DriverVerificationPage from '@/pages/driver/VerificationPage'
 import DriverSubscriptionPage from '@/pages/driver/SubscriptionPage'
+import DriverAdsPage from '@/pages/driver/AdsPage'
 import AdminDashboardPage from '@/pages/admin/DashboardPage'
 import NotificationsPage from '@/pages/NotificationsPage'
 import SharedTripPage from '@/pages/SharedTripPage'
@@ -117,6 +118,7 @@ function AppRoutes() {
       <Route path="/driver/home"         element={<RoleRoute allowedRole="driver"><DriverHomePage /></RoleRoute>} />
       <Route path="/driver/verification" element={<RoleRoute allowedRole="driver"><DriverVerificationPage /></RoleRoute>} />
       <Route path="/driver/subscription" element={<RoleRoute allowedRole="driver"><DriverSubscriptionPage /></RoleRoute>} />
+      <Route path="/driver/ads"          element={<RoleRoute allowedRole="driver"><DriverAdsPage /></RoleRoute>} />
       <Route path="/driver/notifications" element={<RoleRoute allowedRole="driver"><NotificationsPage /></RoleRoute>} />
 
       {/* Admin pages */}

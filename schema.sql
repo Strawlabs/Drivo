@@ -768,3 +768,73 @@ create policy "incident_reports_update_admin_only"
 create index if not exists shared_trip_links_token_idx on public.shared_trip_links (token);
 create index if not exists incident_reports_reported_by_idx on public.incident_reports (reported_by, status);
 create index if not exists sos_events_triggered_by_idx on public.sos_events (triggered_by);
+
+-- ============================================================
+-- ADMIN OPERATIONS, ADS & REPORTS TASK
+--
+-- Scope decision (asked user): ad campaigns are assignable only to
+-- drivers with an active/grace_period Elite subscription — keeps the
+-- Basic -> Pro -> Elite ladder meaningful (Basic: nothing extra, Pro:
+-- Preferred Riders, Elite: priority visibility + ads), rather than
+-- treating ads as unrelated to the subscription system.
+--
+-- Out of scope, stated explicitly rather than faked: EV OEM/
+-- financing/charging-partner referral leads (the ticket's own
+-- acceptance criterion needs a real partner to send a lead to — none
+-- exists) and PostHog event analytics (needs a real account/API key).
+-- The reporting UI itself runs entirely on our own Supabase data and
+-- doesn't depend on PostHog.
+--
+-- ad_campaigns/driver_campaign_assignments had wide-open dev policies
+-- since the Driver Dashboard task — replaced with real ones now that
+-- campaigns represent real driver earnings.
+-- ============================================================
+
+drop policy if exists "dev_all_ad_campaigns" on public.ad_campaigns;
+drop policy if exists "dev_all_driver_campaign_assignments" on public.driver_campaign_assignments;
+
+-- Campaign details aren't sensitive — any authenticated user can read
+-- them (a driver needs to see what they're being asked to accept).
+-- Only admins create/edit/cancel a campaign.
+create policy "ad_campaigns_select_all"
+  on public.ad_campaigns for select
+  using (true);
+
+create policy "ad_campaigns_admin_write"
+  on public.ad_campaigns for all
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- A driver sees only their own assignments; admins see all (needed
+-- for the assignment/completion workflow and ad-performance reports).
+create policy "driver_campaign_assignments_select_own_or_admin"
+  on public.driver_campaign_assignments for select
+  using (
+    auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+-- Only an admin assigns a campaign to a driver in the first place.
+create policy "driver_campaign_assignments_insert_admin_only"
+  on public.driver_campaign_assignments for insert
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- A driver can only accept/reject their own assignment (never touch
+-- earnings_credited or move it to 'completed' themselves — that's an
+-- admin-only transition once the campaign's actually run its course).
+create policy "driver_campaign_assignments_update_own_or_admin"
+  on public.driver_campaign_assignments for update
+  using (
+    auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  )
+  with check (
+    (
+      auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+      and status in ('accepted', 'rejected')
+    )
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+create index if not exists driver_campaign_assignments_driver_idx on public.driver_campaign_assignments (driver_id, status);
+create index if not exists ad_campaigns_status_idx on public.ad_campaigns (status);
