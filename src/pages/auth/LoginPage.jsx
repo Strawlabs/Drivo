@@ -248,7 +248,7 @@ export default function LoginPage() {
                   transition: 'all 0.15s ease',
                 }}
               >
-                {loading ? 'Checking…' : 'Log In'}
+                {loading ? 'Sending…' : 'Send OTP'}
                 {!loading && (
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                     <path d="M5 12h14M13 6l6 6-6 6" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>

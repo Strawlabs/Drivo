@@ -4,6 +4,8 @@ import LoginPage from '@/pages/auth/LoginPage'
 import RegisterPage from '@/pages/auth/RegisterPage'
 import RiderHomePage from '@/pages/rider/HomePage'
 import BookRidePage from '@/pages/rider/BookRidePage'
+import DriverProfilePage from '@/pages/rider/DriverProfilePage'
+import HelpSupportPage from '@/pages/rider/HelpSupportPage'
 import ActiveRidePage from '@/pages/rider/ActiveRidePage'
 import RideCompletePage from '@/pages/rider/RideCompletePage'
 import ScheduledRidesPage from '@/pages/rider/ScheduledRidesPage'
@@ -108,6 +110,8 @@ function AppRoutes() {
       {/* Rider pages */}
       <Route path="/rider/home"          element={<RoleRoute allowedRole="rider"><RiderHomePage /></RoleRoute>} />
       <Route path="/rider/book-ride"     element={<RoleRoute allowedRole="rider"><BookRidePage /></RoleRoute>} />
+      <Route path="/rider/driver/:driverId" element={<RoleRoute allowedRole="rider"><DriverProfilePage /></RoleRoute>} />
+      <Route path="/rider/help"          element={<RoleRoute allowedRole="rider"><HelpSupportPage /></RoleRoute>} />
       <Route path="/rider/active-ride"   element={<RoleRoute allowedRole="rider"><ActiveRidePage /></RoleRoute>} />
       <Route path="/rider/ride-complete" element={<RoleRoute allowedRole="rider"><RideCompletePage /></RoleRoute>} />
       <Route path="/rider/schedule"      element={<RoleRoute allowedRole="rider"><ScheduledRidesPage /></RoleRoute>} />

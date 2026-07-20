@@ -838,3 +838,179 @@ create policy "driver_campaign_assignments_update_own_or_admin"
 
 create index if not exists driver_campaign_assignments_driver_idx on public.driver_campaign_assignments (driver_id, status);
 create index if not exists ad_campaigns_status_idx on public.ad_campaigns (status);
+
+-- ============================================================
+-- RLS HARDENING — the very first policies added to this project
+-- (users, driver_profiles, vehicles, rides, payments, notifications,
+-- ride_ratings, receipts, go_home_sessions + the receipts storage
+-- bucket) were left on "dev_all_* for all using (true)" — wide open
+-- to anyone with just the public anon key, no login required. Unlike
+-- preferred_drivers/subscriptions/ad_campaigns (already tightened
+-- earlier, each with its own drop-then-recreate), these nine never
+-- got a real policy. Replaced below with least-privilege policies
+-- traced against every real caller (src/lib/*.js, RegisterPage,
+-- driver HomePage, admin DashboardPage) so no working flow breaks.
+-- ============================================================
+
+-- USERS — every cross-user lookup in the app (driver names in
+-- Discovery/reviews, family-invite lookup by phone, notification
+-- sender context) needs broad read, but it must require a real
+-- session, not just the anon key. Self can create/edit/delete their
+-- own row (delete matches RegisterPage's rollback-on-failure path);
+-- admin can edit any row (driver suspension touches users.is_active
+-- in some flows).
+drop policy if exists "dev_all_users" on public.users;
+create policy "users_select_authenticated" on public.users for select using (auth.uid() is not null);
+create policy "users_insert_self" on public.users for insert with check (auth.uid() = id);
+create policy "users_update_self_or_admin" on public.users for update
+  using (auth.uid() = id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (auth.uid() = id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+create policy "users_delete_self" on public.users for delete using (auth.uid() = id);
+
+-- DRIVER_PROFILES — riders need to browse/read any driver (Discovery,
+-- driver profile view, preferred drivers); admin needs to
+-- approve/suspend. Note: this table still mixes public fields
+-- (rating, total_rides) with sensitive KYC fields (aadhar_number,
+-- pan_number, bank_account, upi_id) in one row — RLS is row-level,
+-- so any authenticated reader can technically SELECT those columns
+-- too. The app itself never queries them for other drivers, but a
+-- direct REST call could. Real fix is splitting KYC fields into a
+-- separate admin/self-only table — flagged, not done here.
+drop policy if exists "dev_all_driver_profiles" on public.driver_profiles;
+create policy "driver_profiles_select_authenticated" on public.driver_profiles for select using (auth.uid() is not null);
+create policy "driver_profiles_insert_self" on public.driver_profiles for insert with check (auth.uid() = user_id);
+create policy "driver_profiles_update_self_or_admin" on public.driver_profiles for update
+  using (auth.uid() = user_id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (auth.uid() = user_id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- VEHICLES — same broad-read shape as driver_profiles (riders browse
+-- vehicle info on any driver); writes limited to the owning driver
+-- (via their driver_profiles row) or admin (vehicle verification).
+drop policy if exists "dev_all_vehicles" on public.vehicles;
+create policy "vehicles_select_authenticated" on public.vehicles for select using (auth.uid() is not null);
+create policy "vehicles_insert_own_or_admin" on public.vehicles for insert
+  with check (
+    auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+create policy "vehicles_update_own_or_admin" on public.vehicles for update
+  using (
+    auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  )
+  with check (
+    auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+-- RIDES — select/update available to the rider, the assigned driver,
+-- a family owner (for members' active-ride monitoring on the Family
+-- Dashboard), or admin. Insert allows a rider booking for themselves
+-- OR a family owner dispatching a scheduled ride on behalf of an
+-- active family member (src/lib/family.js dispatchDueScheduledRides
+-- inserts rider_id = the member, not auth.uid()) — without the
+-- family-owner clause this would silently break that flow.
+drop policy if exists "dev_all_rides" on public.rides;
+create policy "rides_select_involved" on public.rides for select
+  using (
+    auth.uid() = rider_id
+    or auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or auth.uid() in (select primary_user_id from public.family_accounts where member_user_id = rides.rider_id and status = 'active')
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+create policy "rides_insert_self_or_family_owner" on public.rides for insert
+  with check (
+    auth.uid() = rider_id
+    or auth.uid() in (select primary_user_id from public.family_accounts where member_user_id = rides.rider_id and status = 'active')
+  );
+create policy "rides_update_involved" on public.rides for update
+  using (
+    auth.uid() = rider_id
+    or auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+-- PAYMENTS — rider creates/confirms their own; assigned driver and
+-- admin can read (earnings, reports). Insert also checks the
+-- referenced ride's own rider_id, not just the new row's rider_id
+-- column — caught during post-migration negative testing that
+-- "auth.uid() = rider_id" alone lets a rider insert a payment (or,
+-- same bug on ride_ratings below, a rating) against ANY ride_id as
+-- long as they set rider_id to themselves, corrupting another
+-- rider's ride record and, for ratings, polluting a driver's score.
+drop policy if exists "dev_all_payments" on public.payments;
+create policy "payments_select_involved" on public.payments for select
+  using (
+    auth.uid() = rider_id
+    or auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+create policy "payments_insert_self" on public.payments for insert
+  with check (
+    auth.uid() = rider_id
+    and exists (select 1 from public.rides r where r.id = payments.ride_id and r.rider_id = auth.uid())
+  );
+create policy "payments_update_self_or_admin" on public.payments for update
+  using (auth.uid() = rider_id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- NOTIFICATIONS — strictly self-only for read/update (this is private
+-- per-user data, no admin exception needed since no admin view reads
+-- other users' notifications). Insert has to stay broad: nearly every
+-- notification in this app is authored by someone other than its
+-- recipient (booking a ride notifies the driver, approving a family
+-- invite notifies the other member, admin resolving an incident
+-- notifies the reporter) — there's no "auth.uid() = X" self-check
+-- that fits. Residual risk: any authenticated user could spam another
+-- user with fake notification rows; closing that fully would need a
+-- set of narrow per-feature RPCs instead of a direct table insert.
+drop policy if exists "dev_all_notifications" on public.notifications;
+create policy "notifications_select_own" on public.notifications for select using (auth.uid() = user_id);
+create policy "notifications_insert_authenticated" on public.notifications for insert with check (auth.uid() is not null);
+create policy "notifications_update_own" on public.notifications for update using (auth.uid() = user_id);
+
+-- RIDE_RATINGS — reviews are meant to be visible on any driver's
+-- public profile (src/lib/drivers.js fetchDriverProfile), so select
+-- is broad-authenticated by design, not an oversight. Only the rider
+-- who took the ride can insert a rating for it.
+drop policy if exists "dev_all_ride_ratings" on public.ride_ratings;
+create policy "ride_ratings_select_authenticated" on public.ride_ratings for select using (auth.uid() is not null);
+create policy "ride_ratings_insert_self" on public.ride_ratings for insert
+  with check (
+    auth.uid() = rider_id
+    and exists (select 1 from public.rides r where r.id = ride_ratings.ride_id and r.rider_id = auth.uid())
+  );
+
+-- RECEIPTS — visible to the rider/driver on that payment, or admin.
+-- Only the paying rider's own generateReceipt() call can insert one.
+drop policy if exists "dev_all_receipts" on public.receipts;
+create policy "receipts_select_involved" on public.receipts for select
+  using (
+    exists (
+      select 1 from public.payments p
+      where p.id = receipts.payment_id
+        and (p.rider_id = auth.uid() or auth.uid() in (select user_id from public.driver_profiles where id = p.driver_id))
+    )
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+create policy "receipts_insert_own_payment" on public.receipts for insert
+  with check (exists (select 1 from public.payments p where p.id = receipts.payment_id and p.rider_id = auth.uid()));
+
+-- GO_HOME_SESSIONS — purely a driver's own private routing
+-- preference; no rider or other-driver access needed anywhere.
+drop policy if exists "dev_all_go_home_sessions" on public.go_home_sessions;
+create policy "go_home_sessions_own_or_admin" on public.go_home_sessions for all
+  using (
+    auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  )
+  with check (auth.uid() in (select user_id from public.driver_profiles where id = driver_id));
+
+-- STORAGE — receipts bucket. Read stays public since receipt_url is
+-- a getPublicUrl() link opened directly in the browser (switching to
+-- signed URLs would be a bigger change than an RLS pass); write is
+-- now gated to authenticated sessions instead of anyone with the
+-- anon key.
+drop policy if exists "dev_all_receipts_objects" on storage.objects;
+create policy "receipts_objects_select_public" on storage.objects for select using (bucket_id = 'receipts');
+create policy "receipts_objects_insert_authenticated" on storage.objects for insert
+  with check (bucket_id = 'receipts' and auth.uid() is not null);

@@ -44,7 +44,7 @@ function StarIcon() {
 }
 
 // ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome, onOpenPreferredRiders }) {
+function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome, onOpenPreferredRiders, onOpenEarnings, onOpenSubscription }) {
   return (
     <main className="mx-auto px-5 pb-32" style={{ maxWidth: 480, paddingTop: 24 }}>
       {/* Status Hero */}
@@ -99,7 +99,7 @@ function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle,
       {/* Quick Actions */}
       <p style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 12 }}>Quick Actions</p>
       <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 32 }}>
-        {[{ label: 'Go Home', icon: '📍', onClick: onOpenGoHome }, { label: 'Earnings', icon: '💰' }, { label: 'Drivo+', icon: '🎖️' }].map(({ label, icon, onClick }) => (
+        {[{ label: 'Go Home', icon: '📍', onClick: onOpenGoHome }, { label: 'Earnings', icon: '💰', onClick: onOpenEarnings }, { label: 'Drivo+', icon: '🎖️', onClick: onOpenSubscription }].map(({ label, icon, onClick }) => (
           <button key={label} onClick={onClick} className="flex flex-col items-center gap-2" style={{ padding: 16, borderRadius: 12, border: 'none', background: 'transparent', cursor: onClick ? 'pointer' : 'default', transition: 'background 0.15s ease', position: 'relative' }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--color-surface-container)'}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
@@ -1123,7 +1123,7 @@ export default function DriverHomePage() {
 
       {/* Tab Content */}
       <div style={{ paddingBottom: 80 }}>
-        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => setShowGoHomeModal(true)} onOpenPreferredRiders={() => setShowPreferredRiders(true)} />}
+        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => setShowGoHomeModal(true)} onOpenPreferredRiders={() => setShowPreferredRiders(true)} onOpenEarnings={() => setActiveNav('rides')} onOpenSubscription={() => navigate('/driver/subscription')} />}
         {activeNav === 'discovery' && <DiscoveryTab />}
         {activeNav === 'rides'     && <RidesTab driverProfileId={driverProfileId} />}
         {activeNav === 'family'    && <FamilyTab />}
