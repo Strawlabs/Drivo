@@ -362,6 +362,7 @@ function TripsTab() {
 const FILTERS = ['EV Auto', 'EV Car', 'Distance']
 
 function DriversTab({ onBookDriver }) {
+  const navigate = useNavigate()
   const [view, setView] = useState('list')
   const [activeFilter, setActiveFilter] = useState('EV Auto')
   const [drivers, setDrivers] = useState([])
@@ -440,7 +441,8 @@ function DriversTab({ onBookDriver }) {
             </div>
 
             <div className="flex gap-2">
-              <button style={{ flex: 1, height: 40, border: '1px solid var(--color-outline-variant)', borderRadius: 10, background: 'none', fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
+              <button onClick={() => navigate(`/rider/driver/${driver.id}`)}
+                style={{ flex: 1, height: 40, border: '1px solid var(--color-outline-variant)', borderRadius: 10, background: 'none', fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>
                 View Profile
               </button>
               <button onClick={() => onBookDriver(driver)}
@@ -488,7 +490,7 @@ function DriversTab({ onBookDriver }) {
 }
 
 // ── TAB: Profile ────────────────────────────────────────────────
-function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpenFamily, onOpenNotifications }) {
+function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpenFamily, onOpenNotifications, onOpenHelp }) {
   return (
     <div className="px-5 pt-6 pb-8">
       {/* Profile hero */}
@@ -536,7 +538,7 @@ function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpe
           title: 'Support',
           items: [
             { icon: '🛡️', label: 'Safety Center' },
-            { icon: '❓', label: 'Help & Support' },
+            { icon: '❓', label: 'Help & Support', onClick: onOpenHelp },
             { icon: '📄', label: 'Terms & Privacy' },
           ]
         },
@@ -758,7 +760,7 @@ export default function RiderHomePage() {
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} />}
         {activeNav === 'trips'   && <TripsTab />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
-        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} />}
+        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} />}
       </main>
 
       {showPreferredDrivers && user && (

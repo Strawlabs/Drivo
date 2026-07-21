@@ -2,6 +2,12 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
+import {
+  fetchCampaigns, createCampaign, updateCampaignStatus,
+  fetchCampaignAssignments, fetchEligibleDriversForCampaign,
+  assignCampaignToDriver, completeAssignment,
+} from '@/lib/ads'
+import { fetchPlatformData, summarizeReports, REPORT_PERIODS } from '@/lib/reports'
 
 function Avatar({ name = '?', size = 40 }) {
   return (
@@ -290,6 +296,302 @@ function SafetyAdminPanel() {
   )
 }
 
+const CAMPAIGN_STATUS_COLOR = {
+  draft: { bg: '#e5eeff', color: '#4f6073' },
+  active: { bg: 'rgba(46,204,113,0.12)', color: '#006d37' },
+  completed: { bg: '#d2e4fb', color: '#4f6073' },
+  cancelled: { bg: 'rgba(186,26,26,0.08)', color: '#ba1a1a' },
+}
+
+function AdsAdminPanel() {
+  const [campaigns, setCampaigns] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showCreate, setShowCreate] = useState(false)
+  const [form, setForm] = useState({ title: '', description: '', revenueSharePercent: 10, startDate: '', endDate: '' })
+  const [selectedCampaignId, setSelectedCampaignId] = useState(null)
+  const [assignments, setAssignments] = useState([])
+  const [eligibleDrivers, setEligibleDrivers] = useState([])
+  const [creditDraft, setCreditDraft] = useState({})
+
+  async function load() {
+    setLoading(true)
+    const data = await fetchCampaigns()
+    setCampaigns(data)
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function loadAssignments(campaignId) {
+    const [a, e] = await Promise.all([fetchCampaignAssignments(campaignId), fetchEligibleDriversForCampaign(campaignId)])
+    setAssignments(a)
+    setEligibleDrivers(e)
+  }
+
+  async function handleSelectCampaign(id) {
+    setSelectedCampaignId(id)
+    await loadAssignments(id)
+  }
+
+  async function handleCreate() {
+    if (!form.title.trim()) return
+    await createCampaign({
+      title: form.title.trim(),
+      description: form.description.trim(),
+      revenueSharePercent: Number(form.revenueSharePercent),
+      startDate: form.startDate,
+      endDate: form.endDate,
+    })
+    setForm({ title: '', description: '', revenueSharePercent: 10, startDate: '', endDate: '' })
+    setShowCreate(false)
+    await load()
+  }
+
+  async function handleStatusChange(id, status) {
+    await updateCampaignStatus(id, status)
+    await load()
+    if (selectedCampaignId === id) await loadAssignments(id)
+  }
+
+  async function handleAssign(driverId) {
+    if (!selectedCampaignId) return
+    await assignCampaignToDriver({ campaignId: selectedCampaignId, driverId })
+    await loadAssignments(selectedCampaignId)
+    await load()
+  }
+
+  async function handleComplete(assignmentId) {
+    const amount = Number(creditDraft[assignmentId])
+    if (!amount || amount <= 0) return
+    await completeAssignment(assignmentId, amount)
+    await loadAssignments(selectedCampaignId)
+    await load()
+  }
+
+  if (loading) return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
+
+  const selectedCampaign = campaigns.find(c => c.id === selectedCampaignId)
+
+  return (
+    <>
+      <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden', marginBottom: 28 }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>Ad Campaigns</h2>
+            <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3 }}>Assignable only to Elite-tier drivers.</p>
+          </div>
+          <button onClick={() => setShowCreate(s => !s)} style={{ padding: '8px 18px', border: 'none', borderRadius: 8, background: '#006d37', color: 'white', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            {showCreate ? 'Cancel' : '+ Create Campaign'}
+          </button>
+        </div>
+
+        {showCreate && (
+          <div style={{ padding: 24, borderBottom: '1px solid #bbcbbb', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <input placeholder="Campaign title" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })}
+              style={{ gridColumn: 'span 2', height: 40, padding: '0 12px', border: '1px solid #bbcbbb', borderRadius: 8, fontSize: 13 }} />
+            <input placeholder="Description (optional)" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
+              style={{ gridColumn: 'span 2', height: 40, padding: '0 12px', border: '1px solid #bbcbbb', borderRadius: 8, fontSize: 13 }} />
+            <div>
+              <label style={{ fontSize: 11, color: '#4f6073' }}>Revenue share %</label>
+              <input type="number" value={form.revenueSharePercent} onChange={e => setForm({ ...form, revenueSharePercent: e.target.value })}
+                style={{ width: '100%', height: 40, padding: '0 12px', border: '1px solid #bbcbbb', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }} />
+            </div>
+            <div />
+            <div>
+              <label style={{ fontSize: 11, color: '#4f6073' }}>Start date</label>
+              <input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })}
+                style={{ width: '100%', height: 40, padding: '0 12px', border: '1px solid #bbcbbb', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, color: '#4f6073' }}>End date</label>
+              <input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })}
+                style={{ width: '100%', height: 40, padding: '0 12px', border: '1px solid #bbcbbb', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }} />
+            </div>
+            <button onClick={handleCreate} style={{ gridColumn: 'span 2', height: 40, border: 'none', borderRadius: 8, background: '#006d37', color: 'white', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+              Save as Draft
+            </button>
+          </div>
+        )}
+
+        <div style={{ padding: '8px 24px 20px' }}>
+          {campaigns.length === 0 && <p style={{ fontSize: 13, color: '#4f6073', padding: '12px 0' }}>No campaigns yet.</p>}
+          {campaigns.map(c => {
+            const colors = CAMPAIGN_STATUS_COLOR[c.status] ?? CAMPAIGN_STATUS_COLOR.draft
+            return (
+              <div key={c.id} onClick={() => handleSelectCampaign(c.id)}
+                style={{ padding: '14px 12px', borderTop: '1px solid #e5eeff', cursor: 'pointer', background: selectedCampaignId === c.id ? '#f8f9ff' : 'transparent' }}>
+                <div className="flex justify-between items-start" style={{ marginBottom: 6 }}>
+                  <div>
+                    <p style={{ fontSize: 14, fontWeight: 600, color: '#0b1c30' }}>{c.title}</p>
+                    <p style={{ fontSize: 12, color: '#4f6073' }}>{c.revenue_share_percent}% share · {c.assignedCount} assigned · {c.acceptedCount} accepted · ₹{c.totalCredited.toLocaleString('en-IN')} credited</p>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: colors.color, background: colors.bg, padding: '3px 10px', borderRadius: 6, whiteSpace: 'nowrap' }}>{c.status}</span>
+                </div>
+                <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+                  {c.status === 'draft' && (
+                    <button onClick={() => handleStatusChange(c.id, 'active')} style={{ padding: '5px 12px', border: '1px solid #006d37', borderRadius: 6, background: 'none', color: '#006d37', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Activate</button>
+                  )}
+                  {c.status === 'active' && (
+                    <>
+                      <button onClick={() => handleStatusChange(c.id, 'completed')} style={{ padding: '5px 12px', border: '1px solid #6c7b6d', borderRadius: 6, background: 'none', color: '#3d4a3e', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Mark Completed</button>
+                      <button onClick={() => handleStatusChange(c.id, 'cancelled')} style={{ padding: '5px 12px', border: '1px solid #ba1a1a', borderRadius: 6, background: 'none', color: '#ba1a1a', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      {selectedCampaign && (
+        <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden' }}>
+          <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb' }}>
+            <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>{selectedCampaign.title} — Assignments</h2>
+          </div>
+          <div style={{ padding: '20px 24px' }}>
+            {eligibleDrivers.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <p style={{ fontSize: 12, fontWeight: 600, color: '#4f6073', marginBottom: 8, textTransform: 'uppercase' }}>Assign to Elite Driver</p>
+                <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
+                  {eligibleDrivers.map(d => (
+                    <button key={d.id} onClick={() => handleAssign(d.id)} style={{ padding: '6px 14px', border: '1px solid #006d37', borderRadius: 9999, background: 'none', color: '#006d37', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                      + {d.name} (★{d.rating})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {assignments.length === 0 ? (
+              <p style={{ fontSize: 13, color: '#4f6073' }}>No drivers assigned to this campaign yet.</p>
+            ) : assignments.map(a => (
+              <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderTop: '1px solid #e5eeff' }}>
+                <div>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>{a.driverName}</p>
+                  <p style={{ fontSize: 12, color: '#4f6073', textTransform: 'capitalize' }}>{a.status}{a.earningsCredited ? ` · ₹${a.earningsCredited} credited` : ''}</p>
+                </div>
+                {a.status === 'accepted' && (
+                  <div className="flex gap-2 items-center">
+                    <input type="number" placeholder="Amount (₹)" value={creditDraft[a.id] ?? ''}
+                      onChange={e => setCreditDraft(prev => ({ ...prev, [a.id]: e.target.value }))}
+                      style={{ width: 100, height: 32, padding: '0 10px', border: '1px solid #bbcbbb', borderRadius: 6, fontSize: 12 }} />
+                    <button onClick={() => handleComplete(a.id)} style={{ padding: '6px 14px', border: 'none', borderRadius: 8, background: '#006d37', color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Credit & Complete</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </>
+  )
+}
+
+function MiniBarChart({ buckets, series, height = 120 }) {
+  const max = Math.max(1, ...buckets.flatMap(b => series.map(s => Number(b[s.key]) || 0)))
+  return (
+    <div style={{ height, display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+      {buckets.map(b => (
+        <div key={b.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%' }}>
+          <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end', gap: 2 }}>
+            {series.map(s => (
+              <div key={s.key} title={String(b[s.key])} style={{ flex: 1, height: `${(Number(b[s.key]) / max) * 100}%`, background: s.color, borderRadius: '3px 3px 0 0', minHeight: 2 }} />
+            ))}
+          </div>
+          <span style={{ fontSize: 11, color: '#4f6073' }}>{b.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ReportCard({ title, subtitle, children }) {
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, padding: 24, boxShadow: '0 2px 8px rgba(26,43,60,0.05)' }}>
+      <h3 style={{ fontSize: 16, fontWeight: 600, color: '#0b1c30', margin: 0 }}>{title}</h3>
+      {subtitle && <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3, marginBottom: 14 }}>{subtitle}</p>}
+      {children}
+    </div>
+  )
+}
+
+function ReportsAdminPanel() {
+  const [period, setPeriod] = useState('Monthly')
+  const [report, setReport] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchPlatformData().then(data => {
+      if (cancelled) return
+      setReport(summarizeReports(data, period))
+      setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [period])
+
+  if (loading || !report) return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
+
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {REPORT_PERIODS.map(p => (
+          <button key={p} onClick={() => setPeriod(p)}
+            style={{ padding: '8px 18px', borderRadius: 9999, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: period === p ? '#006d37' : '#e5eeff', color: period === p ? 'white' : '#3d4a3e' }}>
+            {p}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+        <ReportCard title="Driver Growth" subtitle={`${report.driverGrowth.totalApproved} approved of ${report.driverGrowth.totalDrivers} total`}>
+          <MiniBarChart buckets={report.driverGrowth.buckets} series={[{ key: 'newDrivers', color: '#006d37' }]} />
+        </ReportCard>
+
+        <ReportCard title="Ride Volume" subtitle={`${report.rideVolume.totalRidesAllTime} rides in the last 180 days`}>
+          <MiniBarChart buckets={report.rideVolume.buckets} series={[{ key: 'total', color: '#d2e4fb' }, { key: 'completed', color: '#006d37' }]} />
+        </ReportCard>
+
+        <ReportCard title="Revenue" subtitle={`₹${report.revenue.totalRevenue.toLocaleString('en-IN')} total (₹${report.revenue.totalSubscriptionRevenue.toLocaleString('en-IN')} subscriptions + ₹${report.revenue.totalAdRevenue.toLocaleString('en-IN')} ads)`}>
+          <MiniBarChart buckets={report.revenue.buckets} series={[{ key: 'subscriptionRevenue', color: '#006d37' }, { key: 'adRevenue', color: '#4f6073' }]} />
+        </ReportCard>
+
+        <ReportCard title="Preferred Driver Usage" subtitle={`${report.preferredDriverUsage.totalActivePreferred} active relationships today`}>
+          <MiniBarChart buckets={report.preferredDriverUsage.buckets} series={[{ key: 'newSaves', color: '#2ecc71' }]} />
+        </ReportCard>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
+        <ReportCard title="Subscription Mix" subtitle="Active + grace-period, by plan">
+          {report.subscriptionMix.map(s => (
+            <div key={s.plan} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: '1px solid #e5eeff', textTransform: 'capitalize', fontSize: 13, color: '#0b1c30' }}>
+              <span>{s.plan}</span><span style={{ fontWeight: 700 }}>{s.count}</span>
+            </div>
+          ))}
+        </ReportCard>
+
+        <ReportCard title="EV Fleet Mix" subtitle="100% EV by design — auto vs. car split">
+          {report.evFleetMix.map(v => (
+            <div key={v.type} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: '1px solid #e5eeff', fontSize: 13, color: '#0b1c30' }}>
+              <span>{v.type === 'ev_auto' ? 'EV Auto' : 'EV Car'}</span><span style={{ fontWeight: 700 }}>{v.count}</span>
+            </div>
+          ))}
+        </ReportCard>
+
+        <ReportCard title="Advertising Performance" subtitle={`${report.advertisingPerformance.acceptanceRate}% acceptance rate`}>
+          {report.advertisingPerformance.campaignsByStatus.map(c => (
+            <div key={c.status} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: '1px solid #e5eeff', textTransform: 'capitalize', fontSize: 13, color: '#0b1c30' }}>
+              <span>{c.status}</span><span style={{ fontWeight: 700 }}>{c.count}</span>
+            </div>
+          ))}
+          <p style={{ fontSize: 12, color: '#4f6073', marginTop: 10 }}>₹{report.advertisingPerformance.totalCredited.toLocaleString('en-IN')} credited across {report.advertisingPerformance.totalAssignments} assignments</p>
+        </ReportCard>
+      </div>
+    </>
+  )
+}
+
 const NAV = [
   { icon: 'payments',   label: 'Earnings' },
   { icon: 'home_pin',   label: 'Go Home Mode' },
@@ -297,6 +599,7 @@ const NAV = [
   { icon: 'loyalty',    label: 'Subscription' },
   { icon: 'shield',     label: 'Safety' },
   { icon: 'ads_click',  label: 'Ads' },
+  { icon: 'assessment', label: 'Reports' },
   { icon: 'settings',   label: 'Settings' },
 ]
 
@@ -337,7 +640,41 @@ export default function AdminDashboardPage() {
     fetchDrivers()
   }
 
+  async function suspendDriver(id) {
+    await supabase.from('driver_profiles').update({ status: 'suspended' }).eq('id', id)
+    fetchDrivers()
+  }
+
+  async function reactivateDriver(id) {
+    await supabase.from('driver_profiles').update({ status: 'approved' }).eq('id', id)
+    fetchDrivers()
+  }
+
+  const [platformStats, setPlatformStats] = useState(null)
+  const [campaignSummary, setCampaignSummary] = useState([])
+
+  useEffect(() => {
+    async function loadStats() {
+      const data = await fetchPlatformData()
+      const monthly = summarizeReports(data, 'Monthly')
+      const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0)
+      const ridesToday = data.rides.filter(r => new Date(r.created_at) >= startOfToday).length
+      setPlatformStats({
+        evAuto: monthly.evFleetMix.find(v => v.type === 'ev_auto')?.count ?? 0,
+        evCar: monthly.evFleetMix.find(v => v.type === 'ev_car')?.count ?? 0,
+        ridesToday,
+        monthlyRevenue: monthly.revenue.buckets[monthly.revenue.buckets.length - 1]?.total ?? 0,
+        revenueTrend: monthly.revenue.buckets,
+      })
+      const campaigns = await fetchCampaigns()
+      setCampaignSummary(campaigns.slice(0, 2))
+    }
+    loadStats()
+  }, [])
+
   const pendingDrivers = drivers.filter(d => d.kyc_status === 'submitted' || d.kyc_status === 'pending')
+  const manageableDrivers = drivers.filter(d => d.status === 'approved' || d.status === 'suspended')
+  const activeDriverCount = drivers.filter(d => d.status === 'approved' && d.is_online).length
   const filteredDrivers = pendingDrivers.filter(d => {
     const name = d.users?.name ?? ''
     const email = d.users?.email ?? ''
@@ -440,15 +777,19 @@ export default function AdminDashboardPage() {
           <SubscriptionAdminPanel />
         ) : activeNav === 'Safety' ? (
           <SafetyAdminPanel />
+        ) : activeNav === 'Ads' ? (
+          <AdsAdminPanel />
+        ) : activeNav === 'Reports' ? (
+          <ReportsAdminPanel />
         ) : (
         <>
         {/* KPI Cards */}
         <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 28 }}>
           {[
-            { icon: 'person_pin_circle', label: 'Active Drivers',  value: drivers.length,   badge: '+12.4%', iconBg: 'rgba(46,204,113,0.15)', iconColor: '#006d37' },
-            { icon: 'groups',           label: 'Active Riders',    value: '—',              badge: '+8.2%',  iconBg: '#d2e4fb',               iconColor: '#4f6073' },
-            { icon: 'electric_car',     label: 'EV Adoption',      value: '74.2%',          badge: 'Goal: 80%', iconBg: '#2ecc71',            iconColor: 'white',  progress: 74 },
-            { icon: 'account_balance_wallet', label: 'Monthly Revenue', value: '₹2.4M',     badge: '+5.1%',  iconBg: '#213145',               iconColor: '#eaf1ff' },
+            { icon: 'person_pin_circle', label: 'Total Drivers',  value: drivers.length },
+            { icon: 'wifi_tethering',    label: 'Online Now',     value: activeDriverCount },
+            { icon: 'electric_car',      label: 'EV Fleet Mix',   value: platformStats ? `${platformStats.evAuto} Auto · ${platformStats.evCar} Car` : '…' },
+            { icon: 'account_balance_wallet', label: 'Revenue This Month', value: platformStats ? `₹${platformStats.monthlyRevenue.toLocaleString('en-IN')}` : '…' },
           ].map(card => (
             <div key={card.label} style={{
               background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(8px)',
@@ -493,21 +834,19 @@ export default function AdminDashboardPage() {
               </div>
             </div>
             <div style={{ height: 200, display: 'flex', alignItems: 'flex-end', gap: 16, paddingBottom: 24, position: 'relative' }}>
-              {[
-                { month: 'Jan', sub: 60, ads: 40 },
-                { month: 'Feb', sub: 70, ads: 35 },
-                { month: 'Mar', sub: 85, ads: 50 },
-                { month: 'Apr', sub: 65, ads: 45 },
-                { month: 'May', sub: 90, ads: 60 },
-              ].map(bar => (
-                <div key={bar.month} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%' }}>
-                  <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end', gap: 3 }}>
-                    <div style={{ flex: 1, height: `${bar.sub}%`, background: '#006d37', borderRadius: '4px 4px 0 0', transition: 'height 0.3s' }} />
-                    <div style={{ flex: 1, height: `${bar.ads}%`, background: '#4f6073', borderRadius: '4px 4px 0 0', transition: 'height 0.3s' }} />
+              {(() => {
+                const bars = platformStats?.revenueTrend ?? []
+                const max = Math.max(1, ...bars.map(b => b.total))
+                return bars.map(bar => (
+                  <div key={bar.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%' }}>
+                    <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end', gap: 3 }}>
+                      <div style={{ flex: 1, height: `${(bar.subscriptionRevenue / max) * 100}%`, background: '#006d37', borderRadius: '4px 4px 0 0', transition: 'height 0.3s' }} />
+                      <div style={{ flex: 1, height: `${(bar.adRevenue / max) * 100}%`, background: '#4f6073', borderRadius: '4px 4px 0 0', transition: 'height 0.3s' }} />
+                    </div>
+                    <span style={{ fontSize: 12, color: '#4f6073', fontWeight: 500 }}>{bar.label}</span>
                   </div>
-                  <span style={{ fontSize: 12, color: '#4f6073', fontWeight: 500 }}>{bar.month}</span>
-                </div>
-              ))}
+                ))
+              })()}
             </div>
           </div>
 
@@ -515,30 +854,27 @@ export default function AdminDashboardPage() {
           <div style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, padding: 24, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
               <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>Manage Ads</h2>
-              <button style={{ fontSize: 13, fontWeight: 600, color: '#006d37', background: 'none', border: 'none', cursor: 'pointer' }}>View All</button>
+              <button onClick={() => setActiveNav('Ads')} style={{ fontSize: 13, fontWeight: 600, color: '#006d37', background: 'none', border: 'none', cursor: 'pointer' }}>View All</button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1 }}>
-              {[
-                { icon: 'brand_awareness', name: "Summer Drive '24", sub: 'Active • 12k Clicks' },
-                { icon: 'electric_bolt',   name: 'EV Referral Pro',    sub: 'Scheduled • Starts June' },
-              ].map(ad => (
-                <div key={ad.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: '#e5eeff', borderRadius: 12 }}>
+              {campaignSummary.length === 0 && (
+                <p style={{ fontSize: 13, color: '#4f6073' }}>No campaigns yet.</p>
+              )}
+              {campaignSummary.map(ad => (
+                <div key={ad.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: '#e5eeff', borderRadius: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <div style={{ width: 38, height: 38, background: 'white', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 20, color: '#4f6073' }}>{ad.icon}</span>
+                      <span className="material-symbols-outlined" style={{ fontSize: 20, color: '#4f6073' }}>brand_awareness</span>
                     </div>
                     <div>
-                      <p style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30', margin: 0 }}>{ad.name}</p>
-                      <p style={{ fontSize: 11, color: '#4f6073', margin: 0 }}>{ad.sub}</p>
+                      <p style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30', margin: 0 }}>{ad.title}</p>
+                      <p style={{ fontSize: 11, color: '#4f6073', margin: 0, textTransform: 'capitalize' }}>{ad.status} · {ad.assignedCount} assigned</p>
                     </div>
                   </div>
-                  <button style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: 20, color: '#4f6073' }}>more_vert</span>
-                  </button>
                 </div>
               ))}
             </div>
-            <button style={{
+            <button onClick={() => setActiveNav('Ads')} style={{
               marginTop: 16, padding: '12px 0', border: '2px dashed #bbcbbb', borderRadius: 12,
               background: 'none', color: '#4f6073', fontSize: 13, fontWeight: 600, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
@@ -637,6 +973,62 @@ export default function AdminDashboardPage() {
                             onMouseLeave={e => e.currentTarget.style.opacity = '1'}
                           >Approve</button>
                         </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* Manage Drivers — suspend/reactivate an already-approved driver */}
+        <section style={{ marginTop: 28, background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden' }}>
+          <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb' }}>
+            <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>Manage Drivers</h2>
+            <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3 }}>Suspend an approved driver, or reactivate a suspended one.</p>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: '#eff4ff' }}>
+                  {['Driver', 'Status', 'Rating', ''].map(h => (
+                    <th key={h} style={{ padding: '12px 24px', textAlign: h === '' ? 'right' : 'left', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: '#4f6073', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {manageableDrivers.length === 0 ? (
+                  <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: '#4f6073', fontSize: 14 }}>No approved drivers yet.</td></tr>
+                ) : manageableDrivers.map(driver => {
+                  const name = driver.users?.name ?? 'Unknown'
+                  const isSuspended = driver.status === 'suspended'
+                  return (
+                    <tr key={driver.id} style={{ borderTop: '1px solid #e5eeff' }}>
+                      <td style={{ padding: '16px 24px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <Avatar name={name} size={40} />
+                          <p style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30', margin: 0 }}>{name}</p>
+                        </div>
+                      </td>
+                      <td style={{ padding: '16px 24px' }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: isSuspended ? '#ba1a1a' : '#006d37', background: isSuspended ? 'rgba(186,26,26,0.08)' : 'rgba(46,204,113,0.12)', padding: '3px 10px', borderRadius: 6, textTransform: 'capitalize' }}>
+                          {driver.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: '16px 24px', fontSize: 13, color: '#0b1c30' }}>{driver.rating ?? '—'}</td>
+                      <td style={{ padding: '16px 24px', textAlign: 'right' }}>
+                        {isSuspended ? (
+                          <button onClick={() => reactivateDriver(driver.id)}
+                            style={{ padding: '6px 16px', border: 'none', borderRadius: 8, background: '#006d37', color: 'white', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                            Reactivate
+                          </button>
+                        ) : (
+                          <button onClick={() => suspendDriver(driver.id)}
+                            style={{ padding: '6px 16px', border: '1px solid #ba1a1a', borderRadius: 8, background: 'none', color: '#ba1a1a', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                            Suspend
+                          </button>
+                        )}
                       </td>
                     </tr>
                   )
