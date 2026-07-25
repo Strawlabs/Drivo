@@ -270,7 +270,7 @@ export default function RideCompletePage() {
   }
 
   async function handleSubmit() {
-    if (submitting) return
+    if (submitting || payment?.status !== 'completed') return
     setSubmitting(true)
     // Ratings only make sense for completed rides, and ride_ratings.ride_id
     // is unique — skip the insert entirely if either condition doesn't hold
@@ -310,7 +310,11 @@ export default function RideCompletePage() {
           </div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)' }}>Arrived</h1>
         </div>
-        <button onClick={() => navigate('/rider/home', { replace: true })}
+        <button
+          onClick={() => {
+            if (!isPaid && !window.confirm("You haven't paid for this ride yet. Leave without paying?")) return
+            navigate('/rider/home', { replace: true })
+          }}
           style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--color-surface-container)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
           <span className="material-symbols-outlined" style={{ color: 'var(--color-on-surface)' }}>close</span>
         </button>
@@ -591,9 +595,16 @@ export default function RideCompletePage() {
               ))}
             </div>
 
-            {/* Submit */}
-            <button onClick={handleSubmit} disabled={submitting}
-              style={{ width: '100%', height: 52, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 9999, fontSize: 15, fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer', opacity: submitting ? 0.7 : 1, boxShadow: '0 4px 16px rgba(0,109,55,0.25)', transition: 'all 0.2s' }}>
+            {/* Submit — gated on payment. Previously this button had no
+                relationship to isPaid at all, so a rider could rate and
+                leave without ever paying for the ride. */}
+            {!isPaid && (
+              <p style={{ fontSize: 13, color: 'var(--color-error)', textAlign: 'center' }}>
+                Complete payment above before finishing this ride.
+              </p>
+            )}
+            <button onClick={handleSubmit} disabled={submitting || !isPaid}
+              style={{ width: '100%', height: 52, background: isPaid ? 'var(--color-primary)' : 'var(--color-outline-variant)', color: 'white', border: 'none', borderRadius: 9999, fontSize: 15, fontWeight: 700, cursor: (submitting || !isPaid) ? 'not-allowed' : 'pointer', opacity: submitting ? 0.7 : 1, boxShadow: isPaid ? '0 4px 16px rgba(0,109,55,0.25)' : 'none', transition: 'all 0.2s' }}>
               {submitting ? 'Submitting…' : 'Submit Feedback & Done'}
             </button>
           </>
