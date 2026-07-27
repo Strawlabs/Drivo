@@ -28,6 +28,22 @@ export default function ActiveRidePage() {
   const [triggeringSos, setTriggeringSos] = useState(false)
   const [sharePanel, setSharePanel] = useState(null) // null | { url }
   const [sharing, setSharing] = useState(false)
+
+  // The header's real rendered height varies (font metrics, safe-area
+  // insets on notched devices) — a hardcoded top offset for the map, SOS
+  // button, and map controls was measured wrong and left SOS clipped
+  // behind the header. Measure the actual header instead of guessing.
+  const headerRef = useRef(null)
+  const [headerHeight, setHeaderHeight] = useState(64)
+  useEffect(() => {
+    if (!headerRef.current) return
+    const el = headerRef.current
+    const update = () => setHeaderHeight(el.getBoundingClientRect().height)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [rideStatus])
   const fareRef = useRef(fare)
   fareRef.current = fare
 
@@ -42,10 +58,13 @@ export default function ActiveRidePage() {
     setAlternates([])
   }, [rideId])
 
-  // Tick fare & ETA
+  // Tick ETA/progress only — the fare is fixed at booking and must never
+  // change mid-ride (it previously ticked up ₹0.50 every 8s, which read as
+  // a live meter but had no basis: the DB's estimated_fare never moved and
+  // final_fare is set from it on completion, so the rider was just seeing
+  // a fake number climb).
   useEffect(() => {
     const interval = setInterval(() => {
-      setFare(f => parseFloat((f + 0.5).toFixed(2)))
       setEta(e => Math.max(0, e - 1))
       setProgress(p => Math.min(100, p + 5))
     }, 8000)
@@ -267,7 +286,7 @@ export default function ActiveRidePage() {
     <div style={{ minHeight: '100dvh', background: 'var(--color-background)', fontFamily: 'var(--font-sans)', position: 'relative', overflow: 'hidden' }}>
 
       {/* Header */}
-      <header className="fixed top-0 left-0 w-full z-50 flex justify-between items-center px-5 py-3"
+      <header ref={headerRef} className="fixed top-0 left-0 w-full z-50 flex justify-between items-center px-5 py-3"
         style={{ background: 'var(--color-surface)', boxShadow: '0 1px 4px rgba(26,43,60,0.08)' }}>
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/rider/home')}
@@ -283,7 +302,7 @@ export default function ActiveRidePage() {
       </header>
 
       {/* Map */}
-      <div style={{ position: 'fixed', inset: 0, top: 56, background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)' }}>
+      <div style={{ position: 'fixed', inset: 0, top: headerHeight, background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)' }}>
         {[20,40,60,80].map(p => <div key={`h${p}`} style={{ position:'absolute', top:`${p}%`, left:0, right:0, height:1, background:'rgba(46,204,113,0.1)' }} />)}
         {[15,30,50,65,80].map(p => <div key={`v${p}`} style={{ position:'absolute', left:`${p}%`, top:0, bottom:0, width:1, background:'rgba(46,204,113,0.1)' }} />)}
         <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%' }} viewBox="0 0 360 600" preserveAspectRatio="none">
@@ -311,8 +330,10 @@ export default function ActiveRidePage() {
         <div style={{ position:'absolute', inset:0, background:'linear-gradient(to bottom, rgba(248,249,255,0.7) 0%, rgba(248,249,255,0) 20%, rgba(248,249,255,0) 65%, rgba(248,249,255,0.9) 100%)', pointerEvents:'none' }} />
       </div>
 
-      {/* Floating SOS */}
-      <div style={{ position:'fixed', top:72, left:20, zIndex:40 }}>
+      {/* Floating SOS — anchored to the header's measured height (see
+          headerHeight above) instead of a hardcoded guess, which measured
+          the header wrong and left this clipped behind it. */}
+      <div style={{ position:'fixed', top: headerHeight + 16, left:20, zIndex:40 }}>
         <button onClick={() => setSosPanel('confirm')}
           style={{ display:'flex', alignItems:'center', gap:6, background:'var(--color-error)', color:'white', padding:'8px 16px', borderRadius:9999, border:'none', fontSize:13, fontWeight:700, cursor:'pointer', boxShadow:'0 4px 16px rgba(186,26,26,0.35)' }}>
           <span className="material-symbols-outlined" style={{ fontSize:18, fontVariationSettings:"'FILL' 1" }}>emergency_home</span>
@@ -380,7 +401,7 @@ export default function ActiveRidePage() {
       )}
 
       {/* Map controls */}
-      <div style={{ position:'fixed', top:72, right:20, zIndex:40, display:'flex', flexDirection:'column', gap:8 }}>
+      <div style={{ position:'fixed', top: headerHeight + 16, right:20, zIndex:40, display:'flex', flexDirection:'column', gap:8 }}>
         {['my_location','layers'].map(icon => (
           <button key={icon} style={{ width:48, height:48, background:'var(--color-surface)', borderRadius:12, border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', boxShadow:'0 2px 8px rgba(26,43,60,0.12)' }}>
             <span className="material-symbols-outlined" style={{ color:'var(--color-secondary)' }}>{icon}</span>

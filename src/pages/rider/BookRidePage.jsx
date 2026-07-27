@@ -9,6 +9,21 @@ const VEHICLE_OPTIONS = [
   { id: 'space', label: 'Drivo Space', sub: 'EV SUV · 7 min',    icon: 'directions_car',    fare: 380 },
 ]
 
+// Without a real geocoding/Maps integration, pickup and destination are a
+// picker over known Bangalore areas rather than free text — was previously
+// hardcoded to a single fixed pair with no way to change either one at all.
+const KNOWN_LOCATIONS = [
+  'Koramangala 5th Block',
+  'MG Road Metro Station',
+  'HSR Layout Sector 2',
+  'Indiranagar 100 Ft Road',
+  'Whitefield ITPL Gate',
+  'Electronic City Phase 1',
+  'Silk Board Junction',
+  'Jayanagar 4th Block',
+  'Bellandur Lake Road',
+]
+
 export default function BookRidePage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -17,11 +32,16 @@ export default function BookRidePage() {
   const driver = location.state?.driver ?? {
     name: 'Ramesh K.', rating: 4.9, avatar: 'RK', type: 'EV Sedan', eta: '3 mins',
   }
-  const pickup      = location.state?.pickup      ?? 'Koramangala 5th Block'
-  const destination = location.state?.destination ?? 'MG Road Metro Station'
+  const [pickup, setPickup]           = useState(location.state?.pickup ?? 'Koramangala 5th Block')
+  const [destination, setDestination] = useState(location.state?.destination ?? 'MG Road Metro Station')
 
   const [selected, setSelected]   = useState('luxe')
   const [confirming, setConfirming] = useState(false)
+
+  function handleSwap() {
+    setPickup(destination)
+    setDestination(pickup)
+  }
 
   const fare = VEHICLE_OPTIONS.find(v => v.id === selected).fare
 
@@ -116,14 +136,20 @@ export default function BookRidePage() {
           <div className="flex-1 flex flex-col gap-3">
             <div>
               <p style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-on-surface-variant)' }}>Pickup</p>
-              <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)' }}>{pickup}</p>
+              <select value={pickup} onChange={e => setPickup(e.target.value)}
+                style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)', background: 'none', border: 'none', padding: 0, width: '100%', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>
+                {KNOWN_LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+              </select>
             </div>
             <div>
               <p style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-on-surface-variant)' }}>Destination</p>
-              <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)' }}>{destination}</p>
+              <select value={destination} onChange={e => setDestination(e.target.value)}
+                style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)', background: 'none', border: 'none', padding: 0, width: '100%', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>
+                {KNOWN_LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+              </select>
             </div>
           </div>
-          <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 8 }}>
+          <button onClick={handleSwap} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 8 }}>
             <span className="material-symbols-outlined" style={{ color: 'var(--color-secondary)' }}>swap_vert</span>
           </button>
         </div>
