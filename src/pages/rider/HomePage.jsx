@@ -7,13 +7,6 @@ import { fetchPreferredDriversForRider, removePreferredDriver, fetchSubscription
 import { dispatchDueScheduledRides, sendDueReminders } from '@/lib/family'
 import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
 
-const PAST_TRIPS = [
-  { id: 1, from: 'Koramangala 5th Block', to: 'MG Road Metro Station', date: 'Today, 9:14 AM',      fare: '₹184', distance: '6.2 km', duration: '18 mins', driver: 'Ramesh K.', rating: 5, status: 'completed' },
-  { id: 2, from: 'HSR Layout Sector 2',  to: 'Indiranagar 100 Ft Rd',  date: 'Yesterday, 7:42 PM',  fare: '₹312', distance: '9.8 km', duration: '27 mins', driver: 'Priya S.',  rating: 4, status: 'completed' },
-  { id: 3, from: 'Whitefield ITPL Gate', to: 'Bellandur Lake Road',     date: 'Jun 20, 2:30 PM',    fare: '₹520', distance: '14.1 km', duration: '38 mins', driver: 'Anita M.',  rating: 5, status: 'completed' },
-  { id: 4, from: 'Electronic City Ph 1', to: 'Silk Board Junction',     date: 'Jun 19, 8:05 AM',    fare: '₹248', distance: '7.6 km', duration: '22 mins', driver: 'Venkatesh R.', rating: 4, status: 'completed' },
-]
-
 // ── Small shared components ─────────────────────────────────────
 function StarIcon({ filled = true, size = 13 }) {
   return (
@@ -43,7 +36,7 @@ function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
 }
 
 // ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
+function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDrivers }) {
   const [search, setSearch] = useState('')
   const [drivers, setDrivers] = useState([])
 
@@ -123,12 +116,13 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
       <section className="px-5 mb-8">
         <div className="flex justify-between items-center mb-4">
           <h3 style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-on-surface)' }}>Quick Categories</h3>
-          <button style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer' }}>View All</button>
+          <button onClick={onBrowseDrivers} style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer' }}>View All</button>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {[{ label: 'EV Auto', icon: 'electric_rickshaw' }, { label: 'EV Car', icon: 'electric_car' }].map(({ label, icon }) => (
             <button
               key={label}
+              onClick={onBrowseDrivers}
               className="flex flex-col items-center justify-center"
               style={{ padding: 20, background: 'var(--color-surface)', border: '1px solid rgba(187,203,187,0.3)', borderRadius: 16, boxShadow: '0 1px 4px rgba(26,43,60,0.05)', cursor: 'pointer', transition: 'all 0.15s ease' }}
               onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--color-primary)'; e.currentTarget.style.background = 'rgba(46,204,113,0.05)' }}
@@ -231,8 +225,53 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule }) {
 }
 
 // ── TAB: Trips ──────────────────────────────────────────────────
-function TripsTab() {
+// Real ride history — was a hardcoded PAST_TRIPS array that never
+// reflected the rider's actual rides, and its detail view had a "Pay
+// via UPI / Pay Cash" pair and a rating widget that looked interactive
+// but did nothing (that flow already exists for real on
+// RideCompletePage, right after a ride ends). This reads the rider's
+// real completed rides and shows the payment/rating that actually
+// happened, read-only.
+async function fetchTripHistory(riderId) {
+  const { data: rides, error } = await supabase
+    .from('rides')
+    .select('id, pickup_address, destination_address, completed_at, final_fare, distance_km, duration_minutes, driver_id, driver_profiles(users(name))')
+    .eq('rider_id', riderId)
+    .eq('status', 'completed')
+    .order('completed_at', { ascending: false })
+  if (error) throw error
+
+  return Promise.all((rides ?? []).map(async ride => {
+    const [{ data: payment }, { data: rating }] = await Promise.all([
+      supabase.from('payments').select('method, status, amount').eq('ride_id', ride.id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('ride_ratings').select('rating, review').eq('ride_id', ride.id).maybeSingle(),
+    ])
+    const driverName = ride.driver_profiles?.users?.name ?? 'Driver'
+    return {
+      id: ride.id,
+      from: ride.pickup_address,
+      to: ride.destination_address,
+      date: ride.completed_at ? new Date(ride.completed_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '',
+      fare: ride.final_fare != null ? `₹${Number(ride.final_fare).toFixed(0)}` : '—',
+      distance: ride.distance_km ? `${ride.distance_km} km` : '—',
+      duration: ride.duration_minutes ? `${ride.duration_minutes} mins` : '—',
+      driver: driverName,
+      payment,
+      rating: rating?.rating ?? null,
+      review: rating?.review ?? null,
+    }
+  }))
+}
+
+function TripsTab({ userId }) {
+  const [trips, setTrips] = useState([])
+  const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
+
+  useEffect(() => {
+    if (!userId) return
+    fetchTripHistory(userId).then(setTrips).catch(() => setTrips([])).finally(() => setLoading(false))
+  }, [userId])
 
   if (selected) {
     const t = selected
@@ -247,7 +286,7 @@ function TripsTab() {
           <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </div>
-          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-on-surface)' }}>Arrived</span>
+          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-on-surface)' }}>{t.date}</span>
         </div>
 
         {/* Fare card */}
@@ -280,41 +319,32 @@ function TripsTab() {
           </div>
         </div>
 
-        {/* Payment */}
-        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)', marginBottom: 10 }}>Payment Method</p>
-        {[{ label: 'Pay via UPI', icon: '📱' }, { label: 'Pay Cash', icon: '💵' }].map(({ label, icon }) => (
-          <div key={label} className="flex items-center justify-between" style={{ background: 'var(--color-on-surface)', borderRadius: 14, padding: '14px 18px', marginBottom: 10, cursor: 'pointer' }}>
-            <div className="flex items-center gap-3">
-              <span style={{ fontSize: 18 }}>{icon}</span>
-              <span style={{ fontSize: 15, fontWeight: 600, color: 'white' }}>{label}</span>
-            </div>
-            <span style={{ color: 'var(--color-primary)', fontWeight: 700 }}>›</span>
-          </div>
-        ))}
+        {/* Payment — real status for this specific ride, not a re-offer to pay */}
+        <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginBottom: 16 }}>
+          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 6 }}>Payment</p>
+          {t.payment ? (
+            <p style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>
+              {t.payment.status === 'completed' ? '✅ Paid' : t.payment.status === 'flagged' ? '⚠️ Flagged for review' : '❌ Not completed'} via {t.payment.method?.toUpperCase()} · ₹{Number(t.payment.amount).toFixed(2)}
+            </p>
+          ) : (
+            <p style={{ fontSize: 14, color: 'var(--color-secondary)' }}>No payment recorded for this ride.</p>
+          )}
+        </div>
 
-        {/* Rating */}
-        <div style={{ background: 'white', borderRadius: 16, padding: 20, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginTop: 16 }}>
+        {/* Rating — read-only, reflects what was actually submitted */}
+        <div style={{ background: 'white', borderRadius: 16, padding: 20, boxShadow: '0 1px 6px rgba(26,43,60,0.06)' }}>
           <div className="flex items-center gap-3 mb-4">
             <Avatar initials={t.driver.split(' ').map(w => w[0]).join('')} size={44} />
             <div>
-              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)' }}>Rate your Driver</p>
-              <p style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{t.driver} · EV Specialist</p>
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)' }}>{t.driver}</p>
+              <p style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{t.rating ? 'Your rating' : "You didn't rate this trip"}</p>
             </div>
           </div>
-          <Stars rating={t.rating} size={20} />
-          <div style={{ background: 'var(--color-surface-container-low)', borderRadius: 10, padding: '10px 14px', marginTop: 12, fontSize: 14, color: 'var(--color-on-surface-variant)' }}>
-            Add a comment (optional)…
-          </div>
-          <div className="flex gap-2 mt-3 flex-wrap">
-            {['Clean Car', 'Expert Driving', 'Great Chat'].map(tag => (
-              <span key={tag} style={{ fontSize: 12, fontWeight: 600, padding: '4px 12px', borderRadius: 9999, border: '1px solid var(--color-primary)', color: 'var(--color-primary)', background: 'rgba(0,109,55,0.05)' }}>{tag}</span>
-            ))}
-          </div>
+          {t.rating && <Stars rating={t.rating} size={20} />}
+          {t.review && (
+            <p style={{ fontSize: 13, color: 'var(--color-on-surface-variant)', marginTop: 12, fontStyle: 'italic' }}>"{t.review}"</p>
+          )}
         </div>
-
-        <button style={{ width: '100%', height: 52, background: 'var(--color-primary)', color: 'white', borderRadius: 9999, border: 'none', fontSize: 15, fontWeight: 700, cursor: 'pointer', marginTop: 20 }}>
-          Submit Feedback & Done
-        </button>
       </div>
     )
   }
@@ -324,8 +354,13 @@ function TripsTab() {
       <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 4 }}>Your Trips</h2>
       <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginBottom: 24 }}>Tap a trip to view details</p>
 
+      {loading && <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>Loading…</p>}
+      {!loading && trips.length === 0 && (
+        <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No completed trips yet — your ride history will show up here.</p>
+      )}
+
       <div className="flex flex-col gap-3">
-        {PAST_TRIPS.map(trip => (
+        {trips.map(trip => (
           <button
             key={trip.id}
             onClick={() => setSelected(trip)}
@@ -348,7 +383,7 @@ function TripsTab() {
                 <span style={{ fontSize: 13, color: 'var(--color-on-surface-variant)' }}>{trip.driver}</span>
               </div>
               <div className="flex items-center gap-1">
-                <Stars rating={trip.rating} />
+                {trip.rating ? <Stars rating={trip.rating} /> : <span style={{ fontSize: 11, color: 'var(--color-secondary)' }}>Not rated</span>}
               </div>
             </div>
           </button>
@@ -489,8 +524,33 @@ function DriversTab({ onBookDriver }) {
   )
 }
 
+// Grams of CO2 avoided per km, riding an EV instead of a typical petrol
+// vehicle — there's no per-ride emissions tracking in this schema, so
+// this is a documented estimate applied consistently to real distance
+// data, not a per-ride measurement. Was previously a frozen "38kg" that
+// never moved regardless of how many rides were actually taken.
+const CO2_SAVED_G_PER_KM = 120
+
+async function fetchRiderStats(riderId) {
+  const { data, error } = await supabase.from('rides').select('distance_km').eq('rider_id', riderId).eq('status', 'completed')
+  if (error) throw error
+  const rows = data ?? []
+  const totalDistanceKm = rows.reduce((sum, r) => sum + Number(r.distance_km || 0), 0)
+  return {
+    trips: rows.length,
+    co2SavedKg: (totalDistanceKm * CO2_SAVED_G_PER_KM) / 1000,
+  }
+}
+
 // ── TAB: Profile ────────────────────────────────────────────────
-function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpenFamily, onOpenNotifications, onOpenHelp }) {
+function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDrivers, onOpenFamily, onOpenNotifications, onOpenHelp }) {
+  const [stats, setStats] = useState({ trips: 0, co2SavedKg: 0 })
+
+  useEffect(() => {
+    if (!userId) return
+    fetchRiderStats(userId).then(setStats).catch(() => {})
+  }, [userId])
+
   return (
     <div className="px-5 pt-6 pb-8">
       {/* Profile hero */}
@@ -505,9 +565,14 @@ function ProfileTab({ firstName, email, onSignOut, onOpenPreferredDrivers, onOpe
         </div>
       </div>
 
-      {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 24 }}>
-        {[{ label: 'Trips', value: '24' }, { label: 'CO₂ Saved', value: '38kg' }, { label: 'Rating', value: '4.9' }].map(({ label, value }) => (
+      {/* Stats — real trip count and a distance-based CO2 estimate.
+          Previously a third "Rating" stat claimed the rider had a
+          4.9 rating, but nothing in this app lets a driver rate a
+          rider — that direction of rating was never built, so the
+          number had no data behind it at all. Dropped rather than
+          invented. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 24 }}>
+        {[{ label: 'Trips', value: String(stats.trips) }, { label: 'CO₂ Saved (est.)', value: `${stats.co2SavedKg.toFixed(1)}kg` }].map(({ label, value }) => (
           <div key={label} style={{ background: 'white', borderRadius: 14, padding: '14px 8px', textAlign: 'center', boxShadow: '0 1px 4px rgba(26,43,60,0.06)' }}>
             <p style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-primary)' }}>{value}</p>
             <p style={{ fontSize: 11, color: 'var(--color-secondary)', marginTop: 2 }}>{label}</p>
@@ -757,10 +822,10 @@ export default function RiderHomePage() {
 
       {/* Content */}
       <main className="flex-1 overflow-y-auto pb-28">
-        {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} />}
-        {activeNav === 'trips'   && <TripsTab />}
+        {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} onBrowseDrivers={() => setActiveNav('drivers')} />}
+        {activeNav === 'trips'   && <TripsTab userId={user?.id} />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
-        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} />}
+        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} userId={user?.id} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} />}
       </main>
 
       {showPreferredDrivers && user && (

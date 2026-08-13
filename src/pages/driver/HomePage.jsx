@@ -7,24 +7,7 @@ import { HOME_ZONES, validateGoHomeInput, activateGoHome, deactivateGoHome, fetc
 import { fetchPreferredRidersForDriver, approvePreferredRider, declinePreferredRider, blockPreferredRider } from '@/lib/preferredDrivers'
 import { hasQualifyingTier, checkAndUpdateSubscriptionStatus } from '@/lib/subscriptions'
 import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
-
-// ── Mock data ──────────────────────────────────────────────────
-const DISCOVERY_DRIVERS = [
-  { id: 1, name: 'Marcus Thorne',   rating: 4.98, vehicle: 'Tesla Model S',  status: 'available', preferred: true,  avatar: 'MT' },
-  { id: 2, name: 'Elena Rodriguez', rating: 4.92, vehicle: 'Lucid Air Pure', status: 'available', preferred: false, eta: '5m', avatar: 'ER' },
-  { id: 3, name: 'Sarah Jenkins',   rating: 5.00, vehicle: 'Rivian R1S',     status: 'on_ride',   preferred: true,  avatar: 'SJ' },
-  { id: 4, name: 'Arjun Mehta',     rating: 4.87, vehicle: 'BYD Atto 3',    status: 'available', preferred: false, eta: '8m', avatar: 'AM' },
-]
-
-const FAMILY_MEMBERS = [
-  { id: 1, name: 'Sarah',  relation: 'Daughter', status: 'Last ride: 2 hours ago', safe: true,  location: null,          avatar: 'SA' },
-  { id: 2, name: 'Lucas',  relation: 'Son',      status: 'Currently at: Home',      safe: true,  location: 'Home',        avatar: 'LU' },
-]
-
-const SCHEDULED_RIDES = [
-  { time: '08:30 AM', label: 'Gymnastics Practice', sub: 'Pick up: Lucas · EV Luxury' },
-  { time: '05:00 PM', label: 'Family Dinner',        sub: 'Pick up: Sarah · Standard EV' },
-]
+import { fetchAvailableDrivers } from '@/lib/drivers'
 
 // ── Shared ─────────────────────────────────────────────────────
 function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
@@ -135,93 +118,81 @@ function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle,
 }
 
 // ── TAB: Discovery ──────────────────────────────────────────────
-function DiscoveryTab() {
-  const [filter, setFilter] = useState('EV Auto')
-  const filters = ['EV Auto', 'EV Car', 'Distance']
+// A driver can't "request a ride" from another driver — Drivo has no
+// driver-to-driver booking. This used to be a copy of the rider
+// Discovery screen with hardcoded fake names and that same Request
+// Ride action, which made no sense for a driver account. Kept the
+// same visual shape (riders benefit from seeing this list exists) but
+// now shows real online drivers, purely informational.
+function DiscoveryTab({ driverProfileId }) {
+  const [filter, setFilter] = useState('all')
+  const [drivers, setDrivers] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!driverProfileId) return
+    fetchAvailableDrivers({ excludeDriverId: driverProfileId })
+      .then(setDrivers)
+      .catch(() => setDrivers([]))
+      .finally(() => setLoading(false))
+  }, [driverProfileId])
+
+  const filtered = filter === 'all' ? drivers : drivers.filter(d => d.vehicleType === filter)
 
   return (
     <div className="px-5 pt-6 pb-8">
-      <div className="flex justify-between items-start mb-2">
-        <div>
-          <h2 style={{ fontSize: 26, fontWeight: 700, color: 'var(--color-on-surface)' }}>Discovery</h2>
-          <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginTop: 2 }}>Find premium EV certified drivers near you</p>
-        </div>
-        <div className="flex gap-2">
-          {['List', 'Map'].map(v => (
-            <button key={v} style={{ padding: '6px 14px', borderRadius: 9999, border: 'none', background: v === 'List' ? 'var(--color-primary)' : 'var(--color-surface-container)', color: v === 'List' ? 'white' : 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{v}</button>
-          ))}
-        </div>
-      </div>
+      <h2 style={{ fontSize: 26, fontWeight: 700, color: 'var(--color-on-surface)' }}>Discovery</h2>
+      <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginTop: 2, marginBottom: 16 }}>Other Drivo drivers online near you right now</p>
 
       {/* Filter chips */}
-      <div className="flex gap-2 mb-6 mt-4" style={{ overflowX: 'auto', scrollbarWidth: 'none' }}>
-        {filters.map(f => (
-          <button key={f} onClick={() => setFilter(f)} style={{ padding: '6px 16px', borderRadius: 9999, border: `1px solid ${filter === f ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: filter === f ? 'rgba(0,109,55,0.08)' : 'white', color: filter === f ? 'var(--color-primary)' : 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
-            {f === 'EV Auto' ? '🛺 ' : f === 'EV Car' ? '🚗 ' : '📍 '}{f}
+      <div className="flex gap-2 mb-6" style={{ overflowX: 'auto', scrollbarWidth: 'none' }}>
+        {[{ id: 'all', label: 'All', icon: '' }, { id: 'ev_auto', label: 'EV Auto', icon: '🛺 ' }, { id: 'ev_car', label: 'EV Car', icon: '🚗 ' }].map(f => (
+          <button key={f.id} onClick={() => setFilter(f.id)} style={{ padding: '6px 16px', borderRadius: 9999, border: `1px solid ${filter === f.id ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: filter === f.id ? 'rgba(0,109,55,0.08)' : 'white', color: filter === f.id ? 'var(--color-primary)' : 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {f.icon}{f.label}
           </button>
         ))}
       </div>
 
       {/* Driver list */}
       <div className="flex flex-col gap-3 mb-6">
-        {DISCOVERY_DRIVERS.map(driver => (
+        {loading && <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>Loading…</p>}
+        {!loading && filtered.length === 0 && (
+          <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No other drivers online right now.</p>
+        )}
+        {filtered.map(driver => (
           <div key={driver.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)' }}>
-            <div className="flex items-center gap-3 mb-3">
+            <div className="flex items-center gap-3">
               <Avatar initials={driver.avatar} size={52} />
               <div style={{ flex: 1 }}>
                 <div className="flex items-center gap-2">
                   <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.name}</p>
-                  {driver.preferred && (
-                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--color-primary)', background: 'rgba(0,109,55,0.1)', padding: '2px 7px', borderRadius: 9999 }}>PREFERRED</span>
+                  {driver.isPriority && (
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: '#b45309', background: 'rgba(245,158,11,0.14)', padding: '2px 7px', borderRadius: 9999 }}>⭐ ELITE</span>
                   )}
                 </div>
                 <div className="flex items-center gap-1 mt-0.5">
                   <StarIcon />
                   <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
-                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.vehicle}</span>
+                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.type}</span>
                 </div>
                 <div className="flex items-center gap-1.5 mt-1">
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: driver.status === 'available' ? 'var(--color-primary)' : '#F59E0B', display: 'inline-block', flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>
-                    {driver.status === 'available' ? (driver.eta ? `Available in ${driver.eta}` : 'Available Now') : 'Currently on ride'}
-                  </span>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-primary)', display: 'inline-block', flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>Online now</span>
                 </div>
               </div>
-              <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: 'var(--color-secondary)' }}>♡</button>
-            </div>
-            <div className="flex gap-2">
-              <button style={{ flex: 1, height: 40, background: 'white', border: '1px solid var(--color-outline-variant)', borderRadius: 9999, fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>View Profile</button>
-              <button disabled={driver.status === 'on_ride'} style={{ flex: 1, height: 40, background: driver.status === 'on_ride' ? 'var(--color-surface-container)' : 'var(--color-on-surface)', border: 'none', borderRadius: 9999, fontSize: 13, fontWeight: 600, color: driver.status === 'on_ride' ? 'var(--color-secondary)' : 'white', cursor: driver.status === 'on_ride' ? 'default' : 'pointer' }}>
-                {driver.status === 'on_ride' ? 'On Ride' : 'Request Ride'}
-              </button>
             </div>
           </div>
         ))}
       </div>
 
       {/* Drivo Guarantee */}
-      <div style={{ background: 'rgba(0,109,55,0.06)', border: '1px solid rgba(0,109,55,0.2)', borderRadius: 16, padding: 16, marginBottom: 16 }}>
+      <div style={{ background: 'rgba(0,109,55,0.06)', border: '1px solid rgba(0,109,55,0.2)', borderRadius: 16, padding: 16 }}>
         <div className="flex items-center gap-2 mb-2">
           <span style={{ fontSize: 18 }}>🛡️</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>DRIVO GUARANTEE</span>
         </div>
         <p style={{ fontSize: 13, color: 'var(--color-on-surface-variant)', lineHeight: '20px' }}>Every driver in the Drivo network is 100% EV certified and undergoes rigorous hospitality training for a premium experience.</p>
       </div>
-
-      {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-        {[{ value: '1.2k', label: 'kg CO₂ Saved Today', icon: '🌿' }, { value: '142', label: 'Active EV', icon: '⚡' }].map(({ value, label, icon }) => (
-          <div key={label} style={{ background: 'white', borderRadius: 14, padding: 16, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', textAlign: 'center' }}>
-            <span style={{ fontSize: 22 }}>{icon}</span>
-            <p style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)', marginTop: 4 }}>{value}</p>
-            <p style={{ fontSize: 11, color: 'var(--color-secondary)', marginTop: 2 }}>{label}</p>
-          </div>
-        ))}
-      </div>
-
-      <button style={{ width: '100%', height: 50, background: 'var(--color-on-surface)', color: 'white', borderRadius: 9999, border: 'none', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-        🗺️ Explore Map View
-      </button>
     </div>
   )
 }
@@ -365,116 +336,32 @@ function RidesTab({ driverProfileId }) {
 }
 
 // ── TAB: Family ─────────────────────────────────────────────────
-function FamilyTab() {
+// Family Rides (adding members, scheduling, safety-net monitoring) was
+// a deliberate rider-only feature (see the Family Rides task) — a
+// driver account has no family_accounts row of its own. This tab used
+// to fabricate an entire fake household (member names, a fake partner
+// phone number, fake scheduled rides) to fill the space instead of
+// saying so. Replaced with an honest explanation and a pointer to the
+// one real, driver-relevant thing that lives near this concept:
+// Preferred Riders, already on the Home tab.
+function FamilyTab({ onOpenPreferredRiders }) {
   return (
-    <div className="pb-8">
-      <div className="px-5 pt-6 mb-6">
-        <h2 style={{ fontSize: 26, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 4 }}>Family Dashboard</h2>
-        <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginBottom: 16 }}>Keep your loved ones safe and coordinated.</p>
-        <button style={{ width: '100%', height: 48, background: 'var(--color-primary)', color: 'white', borderRadius: 9999, border: 'none', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-          👥 Add Family Member
+    <div className="px-5 pt-6 pb-8">
+      <h2 style={{ fontSize: 26, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 4 }}>Family</h2>
+      <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginBottom: 24 }}>Coordinating rides and safety for a household is a rider account feature.</p>
+
+      <div style={{ background: 'white', borderRadius: 16, padding: 24, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', border: '1px solid rgba(187,203,187,0.3)', textAlign: 'center' }}>
+        <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'var(--color-surface-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+          <span style={{ fontSize: 26 }}>👨‍👩‍👧</span>
+        </div>
+        <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-on-surface)', marginBottom: 8 }}>Not available for driver accounts</p>
+        <p style={{ fontSize: 13, color: 'var(--color-secondary)', lineHeight: 1.5, marginBottom: 20 }}>
+          Adding family members, monitoring their rides, and scheduling ahead is something riders set up from their own account. If someone in your household rides with Drivo, they can add you there directly.
+        </p>
+        <button onClick={onOpenPreferredRiders}
+          style={{ width: '100%', height: 44, background: 'var(--color-primary-container)', color: 'var(--color-on-primary-container)', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+          See riders who've saved you as preferred
         </button>
-      </div>
-
-      {/* Live ride map */}
-      <div style={{ position: 'relative', height: 180, background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)', marginBottom: 20 }}>
-        {[20, 40, 60, 80].map(p => <div key={p} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(46,204,113,0.1)' }} />)}
-        {[20, 40, 60, 80].map(p => <div key={p} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(46,204,113,0.1)' }} />)}
-        <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} viewBox="0 0 360 180" preserveAspectRatio="none">
-          <path d="M60 140 Q120 80 200 90 Q260 100 300 50" stroke="#2ecc71" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.7"/>
-          <circle cx="60" cy="140" r="5" fill="#2ecc71"/>
-          <circle cx="300" cy="50" r="6" fill="#4ae183"/>
-          <circle cx="300" cy="50" r="12" fill="none" stroke="#4ae183" strokeWidth="1.5" opacity="0.4"/>
-        </svg>
-        {/* Live chip */}
-        <div style={{ position: 'absolute', top: 12, left: 12, background: 'var(--color-primary)', color: 'white', borderRadius: 9999, padding: '4px 10px', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'white', display: 'inline-block', animation: 'livePulse 2s infinite' }} />
-          Live Now: Sarah's Ride
-        </div>
-        {/* Destination */}
-        <div style={{ position: 'absolute', bottom: 16, left: 16, right: 16, display: 'flex', justifyContent: 'space-between' }}>
-          <div>
-            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', marginBottom: 2 }}>Destination</p>
-            <p style={{ fontSize: 18, fontWeight: 700, color: 'white' }}>Highland Academy</p>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', marginBottom: 2 }}>Arrival</p>
-            <p style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-primary)' }}>4:12 PM</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-5">
-        {/* Family members */}
-        <div className="flex flex-col gap-3 mb-6">
-          {FAMILY_MEMBERS.map(member => (
-            <div key={member.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', border: '1px solid rgba(187,203,187,0.3)' }}>
-              <div className="flex items-center gap-3">
-                <div style={{ position: 'relative' }}>
-                  <Avatar initials={member.avatar} size={48} bg={member.id === 1 ? 'var(--color-primary)' : '#6366F1'} />
-                  {member.safe && (
-                    <div style={{ position: 'absolute', bottom: 0, right: 0, width: 16, height: 16, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </div>
-                  )}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div className="flex justify-between items-center">
-                    <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-on-surface)' }}>{member.name}</p>
-                    <span style={{ fontSize: 18 }}>🛡️</span>
-                  </div>
-                  <p style={{ fontSize: 12, color: 'var(--color-secondary)', marginTop: 2 }}>{member.relation}</p>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <span style={{ fontSize: 12 }}>📍</span>
-                    <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{member.status}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Safety Net */}
-        <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginBottom: 20 }}>
-          <div className="flex justify-between items-center mb-4">
-            <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-on-surface)' }}>Safety Net</p>
-            <span style={{ fontSize: 20 }}>📡</span>
-          </div>
-          {[
-            { initials: 'EM', name: 'Emma (Partner)', sub: '+1 (555) 012-3456', action: '📞', bg: '#8B5CF6' },
-            { initials: 'DS', name: 'Drivo Support',  sub: 'Emergency 24/7',   action: '🛡️', bg: 'var(--color-primary)' },
-          ].map(({ initials, name, sub, action, bg }) => (
-            <div key={name} className="flex items-center gap-3 mb-3">
-              <Avatar initials={initials} size={40} bg={bg} />
-              <div style={{ flex: 1 }}>
-                <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)' }}>{name}</p>
-                <p style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{sub}</p>
-              </div>
-              <span style={{ fontSize: 22, cursor: 'pointer' }}>{action}</span>
-            </div>
-          ))}
-          <button style={{ width: '100%', height: 40, background: 'none', border: '1.5px dashed var(--color-outline-variant)', borderRadius: 10, fontSize: 13, fontWeight: 600, color: 'var(--color-secondary)', cursor: 'pointer', marginTop: 4 }}>
-            + Edit Contacts
-          </button>
-        </div>
-
-        {/* Scheduled rides */}
-        <div style={{ background: 'var(--color-on-surface)', borderRadius: 16, padding: 16 }}>
-          <p style={{ fontSize: 14, fontWeight: 700, color: 'rgba(255,255,255,0.6)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 14 }}>Scheduled for Tomorrow</p>
-          {SCHEDULED_RIDES.map(({ time, label, sub }, i) => (
-            <div key={i} className="flex gap-4" style={{ marginBottom: i < SCHEDULED_RIDES.length - 1 ? 16 : 0 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                <div style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid var(--color-primary)', background: 'transparent', flexShrink: 0 }} />
-                {i < SCHEDULED_RIDES.length - 1 && <div style={{ width: 2, height: 32, background: 'rgba(255,255,255,0.15)' }} />}
-              </div>
-              <div>
-                <p style={{ fontSize: 14, fontWeight: 700, color: 'white' }}>{time}</p>
-                <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.85)', marginTop: 1 }}>{label}</p>
-                <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 1 }}>{sub}</p>
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   )
@@ -1124,9 +1011,9 @@ export default function DriverHomePage() {
       {/* Tab Content */}
       <div style={{ paddingBottom: 80 }}>
         {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => setShowGoHomeModal(true)} onOpenPreferredRiders={() => setShowPreferredRiders(true)} onOpenEarnings={() => setActiveNav('rides')} onOpenSubscription={() => navigate('/driver/subscription')} />}
-        {activeNav === 'discovery' && <DiscoveryTab />}
+        {activeNav === 'discovery' && <DiscoveryTab driverProfileId={driverProfileId} />}
         {activeNav === 'rides'     && <RidesTab driverProfileId={driverProfileId} />}
-        {activeNav === 'family'    && <FamilyTab />}
+        {activeNav === 'family'    && <FamilyTab onOpenPreferredRiders={() => setShowPreferredRiders(true)} />}
       </div>
 
       {/* Bottom Nav */}

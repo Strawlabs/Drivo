@@ -189,13 +189,12 @@ export default function BookRidePage() {
           </div>
         </div>
 
-        {/* Payment */}
-        <div className="flex items-center justify-between px-1 mb-4">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)', fontSize: 20 }}>payments</span>
-            <span style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>UPI / Cash</span>
-          </div>
-          <button style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer' }}>Change</button>
+        {/* Payment — the actual method is chosen after the ride, on the
+            ride-complete screen, not here. A "Change" link implied a
+            choice existed at this step that doesn't. */}
+        <div className="flex items-center gap-2 px-1 mb-4">
+          <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)', fontSize: 20 }}>payments</span>
+          <span style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>Pay via UPI or cash after your ride</span>
         </div>
 
         {/* CTA */}
