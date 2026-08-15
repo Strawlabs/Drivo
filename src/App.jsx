@@ -10,6 +10,7 @@ import ActiveRidePage from '@/pages/rider/ActiveRidePage'
 import RideCompletePage from '@/pages/rider/RideCompletePage'
 import ScheduledRidesPage from '@/pages/rider/ScheduledRidesPage'
 import FamilyPage from '@/pages/rider/FamilyPage'
+import RiderSubscriptionPage from '@/pages/rider/SubscriptionPage'
 import DriverHomePage from '@/pages/driver/HomePage'
 import DriverVerificationPage from '@/pages/driver/VerificationPage'
 import DriverSubscriptionPage from '@/pages/driver/SubscriptionPage'
@@ -116,6 +117,7 @@ function AppRoutes() {
       <Route path="/rider/ride-complete" element={<RoleRoute allowedRole="rider"><RideCompletePage /></RoleRoute>} />
       <Route path="/rider/schedule"      element={<RoleRoute allowedRole="rider"><ScheduledRidesPage /></RoleRoute>} />
       <Route path="/rider/family"        element={<RoleRoute allowedRole="rider"><FamilyPage /></RoleRoute>} />
+      <Route path="/rider/subscription"  element={<RoleRoute allowedRole="rider"><RiderSubscriptionPage /></RoleRoute>} />
       <Route path="/rider/notifications" element={<RoleRoute allowedRole="rider"><NotificationsPage /></RoleRoute>} />
 
       {/* Driver pages */}

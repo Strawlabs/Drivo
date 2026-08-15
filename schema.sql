@@ -1014,3 +1014,104 @@ drop policy if exists "dev_all_receipts_objects" on storage.objects;
 create policy "receipts_objects_select_public" on storage.objects for select using (bucket_id = 'receipts');
 create policy "receipts_objects_insert_authenticated" on storage.objects for insert
   with check (bucket_id = 'receipts' and auth.uid() is not null);
+
+-- ============================================================
+-- RIDER SUBSCRIPTIONS TASK
+--
+-- ELIGIBLE_TIERS = ['care', 'family'] (src/lib/preferredDrivers.js) has
+-- gated Preferred Drivers since that task, but nothing ever let a rider
+-- actually become 'care'/'family' — users.subscription_tier was only
+-- ever read, never written from the rider side; it had to be set by
+-- hand in the DB. This mirrors the driver subscriptions pattern exactly
+-- (own plans/subscriptions tables, self-reported UPI reference, same
+-- active -> grace_period -> expired transition, client-side since there's
+-- still no backend cron) so riders get a real in-app upgrade flow instead
+-- of a flag nobody can flip.
+--
+-- Kept as its own table pair rather than reusing subscription_plans/
+-- driver_subscriptions — those FK to driver_profiles, not users, and
+-- mixing rider/driver plans in one catalog would make "is this plan for
+-- a rider or a driver" implicit instead of structural.
+--
+-- Care and Family unlock the exact same real, already-gated benefit
+-- (preferred_drivers) — there's no second gated feature in this app to
+-- differentiate them on yet, so they're priced/duration apart instead
+-- (Family is the better-value, longer-commitment option) rather than
+-- inventing a feature split that doesn't exist in code.
+--
+-- users.subscription_tier is left in place but no longer the source of
+-- truth — src/lib/preferredDrivers.js's fetchSubscriptionTier now
+-- derives the effective tier from rider_subscriptions instead.
+-- ============================================================
+
+create table if not exists public.rider_subscription_plans (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (name in ('care', 'family')),
+  price numeric(10,2) not null,
+  duration_days int not null,
+  benefits jsonb,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.rider_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  rider_id uuid not null references public.users(id),
+  plan_id uuid not null references public.rider_subscription_plans(id),
+  status text not null default 'active' check (status in ('active', 'expired', 'cancelled', 'grace_period')),
+  start_date date not null,
+  expiry_date date not null,
+  payment_method text check (payment_method in ('upi')),
+  payment_reference text,
+  paid_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+insert into public.rider_subscription_plans (name, price, duration_days, benefits)
+select 'care', 99, 30, '{"preferred_drivers": true}'::jsonb
+where not exists (select 1 from public.rider_subscription_plans where name = 'care');
+
+insert into public.rider_subscription_plans (name, price, duration_days, benefits)
+select 'family', 249, 90, '{"preferred_drivers": true}'::jsonb
+where not exists (select 1 from public.rider_subscription_plans where name = 'family');
+
+alter table public.rider_subscription_plans enable row level security;
+alter table public.rider_subscriptions enable row level security;
+
+-- Catalog is readable by any authenticated user (rendering the
+-- upgrade screen); only admins manage it.
+create policy "rider_subscription_plans_select_all"
+  on public.rider_subscription_plans for select
+  using (true);
+
+create policy "rider_subscription_plans_admin_write"
+  on public.rider_subscription_plans for all
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- Unlike driver_subscriptions (deliberately open so any rider can sort
+-- Discovery by another driver's tier), no one needs to see a different
+-- rider's subscription — scoped to the owning rider and admins only.
+create policy "rider_subscriptions_select_own_or_admin"
+  on public.rider_subscriptions for select
+  using (
+    auth.uid() = rider_id
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+create policy "rider_subscriptions_insert_own"
+  on public.rider_subscriptions for insert
+  with check (auth.uid() = rider_id);
+
+create policy "rider_subscriptions_update_own_or_admin"
+  on public.rider_subscriptions for update
+  using (
+    auth.uid() = rider_id
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  )
+  with check (
+    auth.uid() = rider_id
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+create index if not exists rider_subscriptions_rider_idx on public.rider_subscriptions (rider_id, status);

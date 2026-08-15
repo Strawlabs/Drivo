@@ -539,9 +539,15 @@ export default function RideCompletePage() {
               </button>
             )}
             {!savedDriverStatus && !isEligibleForPreferredDriver && (
-              <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>
-                Saving preferred drivers is a Care Plan / Family Plan benefit — upgrade your subscription to save {driverInfo.name} for future rides.
-              </p>
+              <div>
+                <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginBottom: 6 }}>
+                  Saving preferred drivers is a Care Plan / Family Plan benefit — upgrade your subscription to save {driverInfo.name} for future rides.
+                </p>
+                <button onClick={() => navigate('/rider/subscription')}
+                  style={{ background: 'none', border: 'none', color: 'var(--color-primary)', fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+                  Upgrade Plan →
+                </button>
+              </div>
             )}
           </section>
         )}

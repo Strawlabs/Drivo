@@ -1,10 +1,13 @@
 import { supabase } from '@/lib/supabase'
+import { fetchEffectiveTier } from '@/lib/riderSubscriptions'
 
 export const ELIGIBLE_TIERS = ['care', 'family']
 
+// Derives the tier from rider_subscriptions (see src/lib/riderSubscriptions.js)
+// rather than users.subscription_tier — that column was never written to
+// from the rider side, so it could never reflect a real upgrade.
 export async function fetchSubscriptionTier(userId) {
-  const { data } = await supabase.from('users').select('subscription_tier').eq('id', userId).maybeSingle()
-  return data?.subscription_tier ?? 'none'
+  return fetchEffectiveTier(userId)
 }
 
 /*

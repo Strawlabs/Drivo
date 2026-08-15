@@ -591,7 +591,7 @@ async function fetchRiderStats(riderId) {
 }
 
 // ── TAB: Profile ────────────────────────────────────────────────
-function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDrivers, onOpenFamily, onOpenNotifications, onOpenHelp }) {
+function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDrivers, onOpenFamily, onOpenNotifications, onOpenHelp, onOpenSubscription }) {
   const [stats, setStats] = useState({ trips: 0, co2SavedKg: 0 })
 
   useEffect(() => {
@@ -642,6 +642,7 @@ function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDriver
           title: 'Preferences',
           items: [
             { icon: '🚗', label: 'Preferred Drivers', onClick: onOpenPreferredDrivers },
+            { icon: '🎖️', label: 'Subscription', onClick: onOpenSubscription },
             { icon: '👨‍👩‍👧', label: 'Family', onClick: onOpenFamily },
             { icon: '🌿', label: 'Eco Impact Report' },
             { icon: '🔔', label: 'Notifications', onClick: onOpenNotifications },
@@ -690,7 +691,7 @@ function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDriver
 }
 
 // ── Preferred Drivers ────────────────────────────────────────────
-function PreferredDriversModal({ userId, onClose, onBookDriver }) {
+function PreferredDriversModal({ userId, onClose, onBookDriver, onUpgrade }) {
   const [loading, setLoading] = useState(true)
   const [drivers, setDrivers] = useState([])
   const [tier, setTier] = useState('none')
@@ -733,11 +734,14 @@ function PreferredDriversModal({ userId, onClose, onBookDriver }) {
 
         {!isEligible && (
           <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 16 }}>
-            <p style={{ fontSize: 13, color: '#B45309' }}>
+            <p style={{ fontSize: 13, color: '#B45309', marginBottom: 8 }}>
               {drivers.length > 0
                 ? "Your Care Plan / Family Plan has expired — upgrade to request these drivers directly again."
                 : "Saving and requesting preferred drivers is a Care Plan / Family Plan benefit."}
             </p>
+            <button onClick={onUpgrade} style={{ background: 'none', border: 'none', color: '#B45309', fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+              Upgrade Plan →
+            </button>
           </div>
         )}
 
@@ -873,7 +877,7 @@ export default function RiderHomePage() {
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} onBrowseDrivers={() => setActiveNav('drivers')} />}
         {activeNav === 'trips'   && <TripsTab userId={user?.id} />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
-        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} userId={user?.id} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} />}
+        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} userId={user?.id} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} onOpenSubscription={() => navigate('/rider/subscription')} />}
       </main>
 
       {showPreferredDrivers && user && (
@@ -881,6 +885,7 @@ export default function RiderHomePage() {
           userId={user.id}
           onClose={() => setShowPreferredDrivers(false)}
           onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })}
+          onUpgrade={() => { setShowPreferredDrivers(false); navigate('/rider/subscription') }}
         />
       )}
 
