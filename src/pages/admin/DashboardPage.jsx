@@ -593,14 +593,11 @@ function ReportsAdminPanel() {
 }
 
 const NAV = [
-  { icon: 'payments',   label: 'Earnings' },
-  { icon: 'home_pin',   label: 'Go Home Mode' },
   { icon: 'analytics',  label: 'Analytics', active: true },
   { icon: 'loyalty',    label: 'Subscription' },
   { icon: 'shield',     label: 'Safety' },
   { icon: 'ads_click',  label: 'Ads' },
   { icon: 'assessment', label: 'Reports' },
-  { icon: 'settings',   label: 'Settings' },
 ]
 
 export default function AdminDashboardPage() {
