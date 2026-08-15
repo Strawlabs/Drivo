@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchDriverProfile } from '@/lib/drivers'
-import { savePreferredDriver, fetchSubscriptionTier, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
+import { savePreferredDriver, fetchSubscriptionTier, fetchPreferredStatus, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
 
 const TIER_LABEL = { basic: null, pro: 'PRO DRIVER', elite: 'ELITE DRIVER' }
 
@@ -27,6 +27,11 @@ export default function DriverProfilePage() {
     if (!user) return
     fetchSubscriptionTier(user.id).then(setSubscriptionTier).catch(() => {})
   }, [user])
+
+  useEffect(() => {
+    if (!user || !profile) return
+    fetchPreferredStatus(user.id, profile.id).then(setSavedStatus).catch(() => {})
+  }, [user, profile])
 
   const isEligibleForPreferredDriver = ELIGIBLE_TIERS.includes(subscriptionTier)
 

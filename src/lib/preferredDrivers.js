@@ -27,6 +27,17 @@ export async function savePreferredDriver({ riderId, driverId }) {
   return data
 }
 
+export async function fetchPreferredStatus(riderId, driverId) {
+  const { data } = await supabase
+    .from('preferred_drivers')
+    .select('status')
+    .eq('rider_id', riderId)
+    .eq('driver_id', driverId)
+    .neq('status', 'removed')
+    .maybeSingle()
+  return data?.status ?? null
+}
+
 export async function removePreferredDriver(id) {
   const { error } = await supabase.from('preferred_drivers').update({ status: 'removed' }).eq('id', id)
   if (error) throw error
