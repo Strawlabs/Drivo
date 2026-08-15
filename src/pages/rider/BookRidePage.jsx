@@ -1,13 +1,14 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { notifyDriverProfile } from '@/lib/notifications'
 import { KNOWN_LOCATIONS } from '@/lib/locations'
+import { estimateFare } from '@/lib/fare'
 
-const VEHICLE_OPTIONS = [
-  { id: 'luxe',  label: 'Drivo Luxe',  sub: 'EV Sedan · 4 min',  icon: 'electric_car',      fare: 284 },
-  { id: 'space', label: 'Drivo Space', sub: 'EV SUV · 7 min',    icon: 'directions_car',    fare: 380 },
+const VEHICLE_TYPES = [
+  { id: 'luxe',  label: 'Drivo Luxe',  type: 'EV Sedan', icon: 'electric_car' },
+  { id: 'space', label: 'Drivo Space', type: 'EV SUV',    icon: 'directions_car' },
 ]
 
 export default function BookRidePage() {
@@ -30,8 +31,14 @@ export default function BookRidePage() {
     setDestination(pickup)
   }
 
-  const fare = VEHICLE_OPTIONS.find(v => v.id === selected).fare
   const sameLocation = pickup === destination
+
+  const vehicleOptions = useMemo(() => VEHICLE_TYPES.map(v => {
+    const { fare, etaMin } = estimateFare(pickup, destination, v.id)
+    return { ...v, fare, sub: `${v.type} · ${etaMin} min` }
+  }), [pickup, destination])
+
+  const fare = vehicleOptions.find(v => v.id === selected).fare
 
   async function handleConfirm() {
     if (confirming || !user) return
@@ -149,7 +156,7 @@ export default function BookRidePage() {
 
         {/* Vehicle options */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-          {VEHICLE_OPTIONS.map(v => (
+          {vehicleOptions.map(v => (
             <button key={v.id} onClick={() => setSelected(v.id)}
               style={{ position: 'relative', background: selected === v.id ? 'white' : 'var(--color-surface-container-low)', border: `2px solid ${selected === v.id ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, borderRadius: 12, padding: '12px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', cursor: 'pointer', opacity: selected === v.id ? 1 : 0.65, transition: 'all 0.15s' }}>
               {selected === v.id && (
