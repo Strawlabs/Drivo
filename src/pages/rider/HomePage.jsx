@@ -97,11 +97,11 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
           <div className="w-full h-full" style={{ background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)', position: 'relative', overflow: 'hidden' }}>
             {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(46,204,113,0.12)' }} />)}
             {[15, 30, 50, 65, 80].map(p => <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(46,204,113,0.12)' }} />)}
-            <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} viewBox="0 0 360 192" preserveAspectRatio="none">
-              <path d="M40 160 Q90 80 150 100 Q200 120 260 60 L300 40" stroke="#2ecc71" strokeWidth="2.5" strokeLinecap="round" fill="none" opacity="0.8"/>
-              <circle cx="40" cy="160" r="5" fill="#2ecc71" opacity="0.9"/>
-              <circle cx="300" cy="40" r="5" fill="#4ae183"/>
-              <circle cx="300" cy="40" r="10" fill="none" stroke="#4ae183" strokeWidth="1.5" opacity="0.4"/>
+            <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} viewBox="0 0 100 100" preserveAspectRatio="none">
+              <path d="M12 78 Q30 45 45 52 Q60 59 75 32 L85 22" stroke="#2ecc71" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity="0.8" vectorEffect="non-scaling-stroke"/>
+              <circle cx="12" cy="78" r="2" fill="#2ecc71" opacity="0.9"/>
+              <circle cx="85" cy="22" r="2" fill="#4ae183"/>
+              <circle cx="85" cy="22" r="4.5" fill="none" stroke="#4ae183" strokeWidth="0.8" opacity="0.4" vectorEffect="non-scaling-stroke"/>
             </svg>
           </div>
           <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.18), transparent)', pointerEvents: 'none' }} />

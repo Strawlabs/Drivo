@@ -34,11 +34,12 @@ export default function BookRidePage() {
   const sameLocation = pickup === destination
 
   const vehicleOptions = useMemo(() => VEHICLE_TYPES.map(v => {
-    const { fare, etaMin } = estimateFare(pickup, destination, v.id)
-    return { ...v, fare, sub: `${v.type} · ${etaMin} min` }
+    const { fare, distanceKm, etaMin } = estimateFare(pickup, destination, v.id)
+    return { ...v, fare, distanceKm, etaMin, sub: `${v.type} · ${etaMin} min` }
   }), [pickup, destination])
 
-  const fare = vehicleOptions.find(v => v.id === selected).fare
+  const selectedVehicle = vehicleOptions.find(v => v.id === selected)
+  const fare = selectedVehicle.fare
 
   async function handleConfirm() {
     if (confirming || !user) return
@@ -69,7 +70,7 @@ export default function BookRidePage() {
         }).catch(() => {})
       }
 
-      navigate('/rider/active-ride', { state: { rideId: data.id, driver, fare, pickup, destination, rideStatus: 'requested' } })
+      navigate('/rider/active-ride', { state: { rideId: data.id, driver, fare, pickup, destination, rideStatus: 'requested', distanceKm: selectedVehicle.distanceKm, etaMin: selectedVehicle.etaMin } })
     } catch (err) {
       alert('Could not create ride: ' + err.message)
       setConfirming(false)

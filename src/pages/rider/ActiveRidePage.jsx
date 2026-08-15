@@ -5,6 +5,34 @@ import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchAvailableDrivers } from '@/lib/drivers'
 import { notifyDriverProfile } from '@/lib/notifications'
 import { triggerSos, createSharedTripLink } from '@/lib/safety'
+import { distanceKmBetween } from '@/lib/fare'
+
+// Route drawn as percentage waypoints (viewBox 0 0 100 100, non-uniform
+// scaling) so it always spans the visible map edge-to-edge regardless of
+// the container's aspect ratio — a fixed portrait-shaped path clipped
+// itself on wide viewports before this.
+const ROUTE_WAYPOINTS = [
+  { x: 18, y: 82 },
+  { x: 38, y: 62 },
+  { x: 55, y: 68 },
+  { x: 72, y: 38 },
+  { x: 85, y: 20 },
+]
+
+function pointAtProgress(waypoints, progressPct) {
+  const t = Math.min(100, Math.max(0, progressPct)) / 100
+  const segCount = waypoints.length - 1
+  const segF = t * segCount
+  const i = Math.min(segCount - 1, Math.floor(segF))
+  const localT = segF - i
+  const a = waypoints[i]
+  const b = waypoints[i + 1]
+  return { x: a.x + (b.x - a.x) * localT, y: a.y + (b.y - a.y) * localT }
+}
+
+function routeToPath(waypoints) {
+  return waypoints.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x} ${p.y}`).join(' ')
+}
 
 export default function ActiveRidePage() {
   const navigate = useNavigate()
@@ -17,10 +45,16 @@ export default function ActiveRidePage() {
   const destination = location.state?.destination ?? 'MG Road Metro Station'
   const initialFare = location.state?.fare        ?? 284
 
+  // Real trip distance (same haversine + route-factor calc that priced the
+  // fare at booking) — falls back to computing it directly if this page
+  // was reached without the value already in nav state.
+  const totalDistanceKm = location.state?.distanceKm ?? distanceKmBetween(pickup, destination) ?? 8
+  const initialEtaMin = location.state?.etaMin ?? 15
+
   const [rideStatus, setRideStatus] = useState(location.state?.rideStatus ?? 'requested')
   const [fare, setFare]         = useState(initialFare)
-  const [eta, setEta]           = useState(8)
-  const [progress, setProgress] = useState(30)
+  const [eta, setEta]           = useState(initialEtaMin)
+  const [progress, setProgress] = useState(0)
   const [cancelling, setCancelling] = useState(false)
   const [alternates, setAlternates] = useState([])
   const [driverPhone, setDriverPhone] = useState(null)
@@ -53,23 +87,34 @@ export default function ActiveRidePage() {
   useEffect(() => {
     setRideStatus(location.state?.rideStatus ?? 'requested')
     setFare(location.state?.fare ?? 284)
-    setEta(8)
-    setProgress(30)
+    setEta(initialEtaMin)
+    setProgress(0)
     setAlternates([])
   }, [rideId])
 
-  // Tick ETA/progress only — the fare is fixed at booking and must never
-  // change mid-ride (it previously ticked up ₹0.50 every 8s, which read as
-  // a live meter but had no basis: the DB's estimated_fare never moved and
+  // Tick progress only — the fare is fixed at booking and must never change
+  // mid-ride (it previously ticked up ₹0.50 every 8s, which read as a live
+  // meter but had no basis: the DB's estimated_fare never moved and
   // final_fare is set from it on completion, so the rider was just seeing
-  // a fake number climb).
+  // a fake number climb). ETA and distance-covered are both derived from
+  // progress against the real trip distance/duration, so "time left" and
+  // "distance left" always agree with each other and with the car marker's
+  // position on the route below.
   useEffect(() => {
     const interval = setInterval(() => {
-      setEta(e => Math.max(0, e - 1))
-      setProgress(p => Math.min(100, p + 5))
-    }, 8000)
+      setProgress(p => Math.min(100, p + 2.5))
+    }, 3000)
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    setEta(Math.max(0, Math.round(initialEtaMin * (1 - progress / 100))))
+  }, [progress, initialEtaMin])
+
+  const distanceTraveledKm = Math.round(totalDistanceKm * (progress / 100) * 10) / 10
+  const distanceRemainingKm = Math.round((totalDistanceKm - totalDistanceKm * (progress / 100)) * 10) / 10
+  const carPos = pointAtProgress(ROUTE_WAYPOINTS, progress)
+  const traveledWaypoints = [...ROUTE_WAYPOINTS.slice(0, Math.floor((progress / 100) * (ROUTE_WAYPOINTS.length - 1)) + 1), carPos]
 
   // Supabase realtime — listen for ride status changes
   useEffect(() => {
@@ -301,15 +346,22 @@ export default function ActiveRidePage() {
         </div>
       </header>
 
-      {/* Map */}
+      {/* Map — route drawn in percentage coordinates (viewBox 0 0 100 100)
+          so it always fills the visible area edge-to-edge regardless of
+          the container's aspect ratio, instead of a fixed portrait-shaped
+          path that clipped itself on wide viewports. */}
       <div style={{ position: 'fixed', inset: 0, top: headerHeight, background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)' }}>
         {[20,40,60,80].map(p => <div key={`h${p}`} style={{ position:'absolute', top:`${p}%`, left:0, right:0, height:1, background:'rgba(46,204,113,0.1)' }} />)}
         {[15,30,50,65,80].map(p => <div key={`v${p}`} style={{ position:'absolute', left:`${p}%`, top:0, bottom:0, width:1, background:'rgba(46,204,113,0.1)' }} />)}
-        <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%' }} viewBox="0 0 360 600" preserveAspectRatio="none">
-          <path d="M80 500 Q130 380 190 350 Q240 320 290 200 L320 120" stroke="#2ecc71" strokeWidth="3" strokeLinecap="round" fill="none" opacity="0.9"/>
+        <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%' }} viewBox="0 0 100 100" preserveAspectRatio="none">
+          {/* Full route, faint */}
+          <path d={routeToPath(ROUTE_WAYPOINTS)} stroke="#2ecc71" strokeWidth="1" strokeLinecap="round" fill="none" opacity="0.25" vectorEffect="non-scaling-stroke"/>
+          {/* Covered portion, solid — grows as progress advances */}
+          <path d={routeToPath(traveledWaypoints)} stroke="#2ecc71" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity="0.95" vectorEffect="non-scaling-stroke"/>
+          <circle cx={ROUTE_WAYPOINTS[0].x} cy={ROUTE_WAYPOINTS[0].y} r="1.2" fill="#2ecc71"/>
         </svg>
-        {/* Car marker */}
-        <div style={{ position:'absolute', top:'55%', left:'42%' }}>
+        {/* Car marker — moves along the route as progress ticks up */}
+        <div style={{ position:'absolute', top:`${carPos.y}%`, left:`${carPos.x}%`, transform:'translate(-50%, -50%)', transition:'top 3s linear, left 3s linear' }}>
           <div style={{ position:'relative', display:'flex', alignItems:'center', justifyContent:'center' }}>
             <div style={{ position:'absolute', width:48, height:48, borderRadius:'50%', background:'rgba(0,109,55,0.2)', animation:'ripple 2s infinite ease-in-out' }} />
             <div style={{ width:24, height:24, borderRadius:'50%', background:'var(--color-primary)', border:'2px solid white', display:'flex', alignItems:'center', justifyContent:'center', position:'relative', zIndex:1 }}>
@@ -317,12 +369,12 @@ export default function ActiveRidePage() {
             </div>
           </div>
         </div>
-        {/* Destination label */}
-        <div style={{ position:'absolute', top:'22%', left:'60%' }}>
-          <div style={{ background:'var(--color-on-surface)', color:'white', padding:'4px 10px', borderRadius:8, fontSize:11, fontWeight:600, marginBottom:6, boxShadow:'0 2px 8px rgba(0,0,0,0.3)' }}>
+        {/* Destination label — anchored to the route's real endpoint */}
+        <div style={{ position:'absolute', top:`${ROUTE_WAYPOINTS[ROUTE_WAYPOINTS.length - 1].y}%`, left:`${ROUTE_WAYPOINTS[ROUTE_WAYPOINTS.length - 1].x}%`, transform:'translate(-50%, -100%)' }}>
+          <div style={{ background:'var(--color-on-surface)', color:'white', padding:'4px 10px', borderRadius:8, fontSize:11, fontWeight:600, marginBottom:6, boxShadow:'0 2px 8px rgba(0,0,0,0.3)', whiteSpace:'nowrap' }}>
             {destination.split(' ').slice(0,2).join(' ')}
           </div>
-          <div style={{ width:32, height:32, background:'var(--color-on-surface)', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 4px 12px rgba(0,0,0,0.3)' }}>
+          <div style={{ width:32, height:32, background:'var(--color-on-surface)', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 4px 12px rgba(0,0,0,0.3)', margin:'0 auto' }}>
             <span className="material-symbols-outlined" style={{ fontSize:18, color:'white', fontVariationSettings:"'FILL' 1" }}>location_on</span>
           </div>
         </div>
@@ -432,7 +484,11 @@ export default function ActiveRidePage() {
           </div>
           {/* Progress bar */}
           <div style={{ marginTop:12, height:8, background:'var(--color-surface-container)', borderRadius:9999, overflow:'hidden' }}>
-            <div style={{ height:'100%', width:`${progress}%`, background:'var(--color-primary)', borderRadius:9999, transition:'width 1s ease-in-out' }} />
+            <div style={{ height:'100%', width:`${progress}%`, background:'var(--color-primary)', borderRadius:9999, transition:'width 3s linear' }} />
+          </div>
+          <div className="flex justify-between mt-1" style={{ fontSize:11, color:'var(--color-on-surface-variant)' }}>
+            <span>{distanceTraveledKm.toFixed(1)} km covered</span>
+            <span>{distanceRemainingKm.toFixed(1)} km left</span>
           </div>
           <div className="flex justify-between mt-1" style={{ fontSize:11, color:'var(--color-on-surface-variant)' }}>
             <span>Start: {fmt(startTime)}</span>
