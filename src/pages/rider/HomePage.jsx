@@ -36,13 +36,19 @@ function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
 }
 
 // ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDrivers }) {
+function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDrivers, userId }) {
   const [search, setSearch] = useState('')
   const [drivers, setDrivers] = useState([])
+  const [co2SavedKg, setCo2SavedKg] = useState(0)
 
   useEffect(() => {
     fetchAvailableDrivers().then(setDrivers).catch(() => setDrivers([]))
   }, [])
+
+  useEffect(() => {
+    if (!userId) return
+    fetchRiderStats(userId).then(s => setCo2SavedKg(s.co2SavedKg)).catch(() => {})
+  }, [userId])
 
   return (
     <>
@@ -206,13 +212,17 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
         </button>
       </section>
 
-      {/* Eco-Warrior Card */}
+      {/* Eco-Warrior Card — was a frozen "12kg this week... premium
+          rewards", regardless of reality, and pointed at a rewards system
+          that doesn't exist anywhere in this app. Same real all-time CO2
+          estimate already shown honestly on the Profile tab; "rewards"
+          claim dropped rather than left dangling. */}
       <section className="px-5 mb-8">
         <div className="flex items-center justify-between" style={{ background: 'rgba(46,204,113,0.08)', border: '2px dashed var(--color-primary-container)', borderRadius: 16, padding: 20 }}>
           <div style={{ maxWidth: '60%' }}>
             <h4 style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-on-primary-container)', marginBottom: 4 }}>Eco-Warrior Status</h4>
             <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-on-secondary-container)' }}>
-              You saved 12kg of CO₂ this week! Keep it up for premium rewards.
+              You've saved {co2SavedKg.toFixed(1)}kg of CO₂ riding EV so far — every ride adds up.
             </p>
           </div>
           <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--color-primary-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -893,7 +903,7 @@ export default function RiderHomePage() {
           stretched edge-to-edge instead of reading as a phone-shaped app,
           making already tightly-spaced cards look sparse and crowded. */}
       <main className="flex-1 overflow-y-auto pb-28" style={{ maxWidth: 480, width: '100%', margin: '0 auto' }}>
-        {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} onBrowseDrivers={() => setActiveNav('drivers')} />}
+        {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} onBrowseDrivers={() => setActiveNav('drivers')} userId={user?.id} />}
         {activeNav === 'trips'   && <TripsTab userId={user?.id} />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
         {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} userId={user?.id} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} onOpenSubscription={() => navigate('/rider/subscription')} />}
