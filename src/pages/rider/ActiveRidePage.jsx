@@ -78,6 +78,25 @@ export default function ActiveRidePage() {
     observer.observe(el)
     return () => observer.disconnect()
   }, [rideStatus])
+
+  // The bottom sheet covers roughly the lower half of the map (it's
+  // content-sized, not a fixed fraction), but the route/car marker were
+  // positioned as percentages of the FULL map div — so most of the route,
+  // including the car marker itself, ended up rendered behind the sheet
+  // and was never visible at all. Measure the sheet like the header above
+  // and only place the route within the strip actually visible above it.
+  const sheetRef = useRef(null)
+  const [sheetHeight, setSheetHeight] = useState(280)
+  useEffect(() => {
+    if (!sheetRef.current) return
+    const el = sheetRef.current
+    const update = () => setSheetHeight(el.getBoundingClientRect().height)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [rideStatus])
+
   const fareRef = useRef(fare)
   fareRef.current = fare
 
@@ -353,31 +372,40 @@ export default function ActiveRidePage() {
       <div style={{ position: 'fixed', inset: 0, top: headerHeight, background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)' }}>
         {[20,40,60,80].map(p => <div key={`h${p}`} style={{ position:'absolute', top:`${p}%`, left:0, right:0, height:1, background:'rgba(46,204,113,0.1)' }} />)}
         {[15,30,50,65,80].map(p => <div key={`v${p}`} style={{ position:'absolute', left:`${p}%`, top:0, bottom:0, width:1, background:'rgba(46,204,113,0.1)' }} />)}
-        <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%' }} viewBox="0 0 100 100" preserveAspectRatio="none">
-          {/* Full route, faint */}
-          <path d={routeToPath(ROUTE_WAYPOINTS)} stroke="#2ecc71" strokeWidth="1" strokeLinecap="round" fill="none" opacity="0.25" vectorEffect="non-scaling-stroke"/>
-          {/* Covered portion, solid — grows as progress advances */}
-          <path d={routeToPath(traveledWaypoints)} stroke="#2ecc71" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity="0.95" vectorEffect="non-scaling-stroke"/>
-          <circle cx={ROUTE_WAYPOINTS[0].x} cy={ROUTE_WAYPOINTS[0].y} r="1.2" fill="#2ecc71"/>
-        </svg>
-        {/* Car marker — moves along the route as progress ticks up */}
-        <div style={{ position:'absolute', top:`${carPos.y}%`, left:`${carPos.x}%`, transform:'translate(-50%, -50%)', transition:'top 3s linear, left 3s linear' }}>
-          <div style={{ position:'relative', display:'flex', alignItems:'center', justifyContent:'center' }}>
-            <div style={{ position:'absolute', width:48, height:48, borderRadius:'50%', background:'rgba(0,109,55,0.2)', animation:'ripple 2s infinite ease-in-out' }} />
-            <div style={{ width:24, height:24, borderRadius:'50%', background:'var(--color-primary)', border:'2px solid white', display:'flex', alignItems:'center', justifyContent:'center', position:'relative', zIndex:1 }}>
-              <span className="material-symbols-outlined" style={{ fontSize:14, color:'white' }}>navigation</span>
+
+        {/* Route layer — sized to stop exactly where the bottom sheet
+            begins (measured via sheetHeight above), not the full map div.
+            Percentage coordinates below are relative to THIS box, so the
+            whole route — including the car marker — stays within the
+            strip that's actually visible above the sheet. */}
+        <div style={{ position:'absolute', top:0, left:0, right:0, bottom: sheetHeight }}>
+          <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%' }} viewBox="0 0 100 100" preserveAspectRatio="none">
+            {/* Full route, faint */}
+            <path d={routeToPath(ROUTE_WAYPOINTS)} stroke="#2ecc71" strokeWidth="1" strokeLinecap="round" fill="none" opacity="0.25" vectorEffect="non-scaling-stroke"/>
+            {/* Covered portion, solid — grows as progress advances */}
+            <path d={routeToPath(traveledWaypoints)} stroke="#2ecc71" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity="0.95" vectorEffect="non-scaling-stroke"/>
+            <circle cx={ROUTE_WAYPOINTS[0].x} cy={ROUTE_WAYPOINTS[0].y} r="1.2" fill="#2ecc71"/>
+          </svg>
+          {/* Car marker — moves along the route as progress ticks up */}
+          <div style={{ position:'absolute', top:`${carPos.y}%`, left:`${carPos.x}%`, transform:'translate(-50%, -50%)', transition:'top 3s linear, left 3s linear' }}>
+            <div style={{ position:'relative', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <div style={{ position:'absolute', width:48, height:48, borderRadius:'50%', background:'rgba(0,109,55,0.2)', animation:'ripple 2s infinite ease-in-out' }} />
+              <div style={{ width:24, height:24, borderRadius:'50%', background:'var(--color-primary)', border:'2px solid white', display:'flex', alignItems:'center', justifyContent:'center', position:'relative', zIndex:1 }}>
+                <span className="material-symbols-outlined" style={{ fontSize:14, color:'white' }}>navigation</span>
+              </div>
+            </div>
+          </div>
+          {/* Destination label — anchored to the route's real endpoint */}
+          <div style={{ position:'absolute', top:`${ROUTE_WAYPOINTS[ROUTE_WAYPOINTS.length - 1].y}%`, left:`${ROUTE_WAYPOINTS[ROUTE_WAYPOINTS.length - 1].x}%`, transform:'translate(-50%, -100%)' }}>
+            <div style={{ background:'var(--color-on-surface)', color:'white', padding:'4px 10px', borderRadius:8, fontSize:11, fontWeight:600, marginBottom:6, boxShadow:'0 2px 8px rgba(0,0,0,0.3)', whiteSpace:'nowrap' }}>
+              {destination.split(' ').slice(0,2).join(' ')}
+            </div>
+            <div style={{ width:32, height:32, background:'var(--color-on-surface)', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 4px 12px rgba(0,0,0,0.3)', margin:'0 auto' }}>
+              <span className="material-symbols-outlined" style={{ fontSize:18, color:'white', fontVariationSettings:"'FILL' 1" }}>location_on</span>
             </div>
           </div>
         </div>
-        {/* Destination label — anchored to the route's real endpoint */}
-        <div style={{ position:'absolute', top:`${ROUTE_WAYPOINTS[ROUTE_WAYPOINTS.length - 1].y}%`, left:`${ROUTE_WAYPOINTS[ROUTE_WAYPOINTS.length - 1].x}%`, transform:'translate(-50%, -100%)' }}>
-          <div style={{ background:'var(--color-on-surface)', color:'white', padding:'4px 10px', borderRadius:8, fontSize:11, fontWeight:600, marginBottom:6, boxShadow:'0 2px 8px rgba(0,0,0,0.3)', whiteSpace:'nowrap' }}>
-            {destination.split(' ').slice(0,2).join(' ')}
-          </div>
-          <div style={{ width:32, height:32, background:'var(--color-on-surface)', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 4px 12px rgba(0,0,0,0.3)', margin:'0 auto' }}>
-            <span className="material-symbols-outlined" style={{ fontSize:18, color:'white', fontVariationSettings:"'FILL' 1" }}>location_on</span>
-          </div>
-        </div>
+
         {/* Gradient scrim bottom */}
         <div style={{ position:'absolute', inset:0, background:'linear-gradient(to bottom, rgba(248,249,255,0.7) 0%, rgba(248,249,255,0) 20%, rgba(248,249,255,0) 65%, rgba(248,249,255,0.9) 100%)', pointerEvents:'none' }} />
       </div>
@@ -462,7 +490,7 @@ export default function ActiveRidePage() {
       </div>
 
       {/* Bottom sheet */}
-      <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:60, background:'var(--color-surface)', borderTopLeftRadius:24, borderTopRightRadius:24, boxShadow:'0 -10px 30px rgba(26,43,60,0.12)', maxHeight:'60vh', overflowY:'auto' }}>
+      <div ref={sheetRef} style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:60, background:'var(--color-surface)', borderTopLeftRadius:24, borderTopRightRadius:24, boxShadow:'0 -10px 30px rgba(26,43,60,0.12)', maxHeight:'60vh', overflowY:'auto' }}>
         {/* Grabber */}
         <div style={{ display:'flex', justifyContent:'center', padding:'10px 0 4px' }}>
           <div style={{ width:48, height:6, background:'var(--color-surface-container-highest)', borderRadius:3 }} />
