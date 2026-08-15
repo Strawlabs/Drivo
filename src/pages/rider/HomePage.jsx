@@ -399,12 +399,25 @@ const FILTERS = ['EV Auto', 'EV Car', 'Distance']
 function DriversTab({ onBookDriver }) {
   const navigate = useNavigate()
   const [view, setView] = useState('list')
-  const [activeFilter, setActiveFilter] = useState('EV Auto')
+  const [activeFilter, setActiveFilter] = useState(null)
   const [drivers, setDrivers] = useState([])
 
   useEffect(() => {
     fetchAvailableDrivers().then(setDrivers).catch(() => setDrivers([]))
   }, [])
+
+  // The chips visually toggled but never actually narrowed the list —
+  // every driver rendered regardless of which one was selected. No 'All'
+  // chip exists, so a chip toggles off (back to showing everyone) if
+  // tapped again rather than always forcing exactly one filter active.
+  // 'Distance' has nothing to filter/sort by — no GPS/geocoding data
+  // exists anywhere in this app — so it stays a visual selection only,
+  // same honest-no-op treatment as elsewhere in this codebase.
+  const filteredDrivers = drivers.filter(d => {
+    if (activeFilter === 'EV Auto') return d.vehicleType === 'ev_auto'
+    if (activeFilter === 'EV Car') return d.vehicleType === 'ev_car'
+    return true
+  })
 
   return (
     <div style={{ paddingBottom: 120 }}>
@@ -429,7 +442,7 @@ function DriversTab({ onBookDriver }) {
         {/* Filter chips */}
         <div className="flex gap-2 mt-4 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
           {FILTERS.map(f => (
-            <button key={f} onClick={() => setActiveFilter(f)}
+            <button key={f} onClick={() => setActiveFilter(prev => prev === f ? null : f)}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 9999, border: `1px solid ${activeFilter === f ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: activeFilter === f ? 'rgba(0,109,55,0.08)' : 'white', color: activeFilter === f ? 'var(--color-primary)' : 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0, transition: 'all 0.15s' }}>
               {f === 'EV Auto' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 17H3a1 1 0 01-1-1v-4l2.5-5h11L18 12v4a1 1 0 01-1 1h-2"/><circle cx="7.5" cy="17.5" r="1.5"/><circle cx="14.5" cy="17.5" r="1.5"/></svg>}
               {f === 'EV Car' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="8" width="20" height="10" rx="2"/><path d="M6 8V6a2 2 0 012-2h8a2 2 0 012 2v2"/><circle cx="7" cy="18" r="1"/><circle cx="17" cy="18" r="1"/></svg>}
@@ -450,12 +463,12 @@ function DriversTab({ onBookDriver }) {
             <div className="w-full h-full" style={{ background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)', position: 'relative', overflow: 'hidden' }}>
               {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(46,204,113,0.12)' }} />)}
               {[15, 30, 50, 65, 80].map(p => <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(46,204,113,0.12)' }} />)}
-              {drivers.length === 0 ? (
+              {filteredDrivers.length === 0 ? (
                 <div className="absolute inset-0 flex items-center justify-center">
                   <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>No EV drivers online right now</p>
                 </div>
               ) : (
-                drivers.map((driver, i) => {
+                filteredDrivers.map((driver, i) => {
                   // No live GPS is submitted anywhere in this app (no geocoding
                   // integration), so these are an illustrative scatter, not real
                   // coordinates — deliberately not faking a precise location.
@@ -481,10 +494,12 @@ function DriversTab({ onBookDriver }) {
       {/* Driver cards */}
       {view === 'list' && (
       <div className="px-5 flex flex-col gap-3">
-        {drivers.length === 0 && (
-          <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No EV drivers online right now — check back soon.</p>
+        {filteredDrivers.length === 0 && (
+          <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>
+            {drivers.length === 0 ? 'No EV drivers online right now — check back soon.' : `No ${activeFilter} drivers online right now.`}
+          </p>
         )}
-        {drivers.map(driver => (
+        {filteredDrivers.map(driver => (
           <div key={driver.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)' }}>
             <div className="flex items-start gap-3 mb-3">
               <Avatar initials={driver.avatar} size={56} />
@@ -872,8 +887,12 @@ export default function RiderHomePage() {
         </button>
       </header>
 
-      {/* Content */}
-      <main className="flex-1 overflow-y-auto pb-28">
+      {/* Content — every other page in this app wraps its content in a
+          480px mobile-frame (BookRidePage, SubscriptionPage, etc.); this
+          was the one screen missing it, so on a wide viewport everything
+          stretched edge-to-edge instead of reading as a phone-shaped app,
+          making already tightly-spaced cards look sparse and crowded. */}
+      <main className="flex-1 overflow-y-auto pb-28" style={{ maxWidth: 480, width: '100%', margin: '0 auto' }}>
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} onBrowseDrivers={() => setActiveNav('drivers')} />}
         {activeNav === 'trips'   && <TripsTab userId={user?.id} />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
