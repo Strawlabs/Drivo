@@ -440,7 +440,46 @@ function DriversTab({ onBookDriver }) {
         </div>
       </div>
 
+      {/* Map view — same stylized illustrative treatment used on Home/
+          Book Ride/Active Ride elsewhere in this app (no real Maps/geo
+          integration exists anywhere here), but plotting the real online
+          drivers instead of being a dead toggle that changed nothing. */}
+      {view === 'map' && (
+        <div className="px-5 mb-3">
+          <div className="relative overflow-hidden" style={{ height: 280, borderRadius: 16, boxShadow: '0 4px 16px rgba(26,43,60,0.12)' }}>
+            <div className="w-full h-full" style={{ background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)', position: 'relative', overflow: 'hidden' }}>
+              {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(46,204,113,0.12)' }} />)}
+              {[15, 30, 50, 65, 80].map(p => <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(46,204,113,0.12)' }} />)}
+              {drivers.length === 0 ? (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>No EV drivers online right now</p>
+                </div>
+              ) : (
+                drivers.map((driver, i) => {
+                  // No live GPS is submitted anywhere in this app (no geocoding
+                  // integration), so these are an illustrative scatter, not real
+                  // coordinates — deliberately not faking a precise location.
+                  const left = 15 + ((i * 37) % 70)
+                  const top = 20 + ((i * 53) % 60)
+                  return (
+                    <button key={driver.id} onClick={() => navigate(`/rider/driver/${driver.id}`)}
+                      style={{ position: 'absolute', left: `${left}%`, top: `${top}%`, transform: 'translate(-50%, -50%)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.4)' }}>
+                        {driver.avatar}
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: 'white', background: 'rgba(11,28,48,0.7)', padding: '1px 6px', borderRadius: 6, whiteSpace: 'nowrap' }}>{driver.name}</span>
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--color-secondary)', marginTop: 8, textAlign: 'center' }}>Illustrative positions — live GPS tracking isn't wired up yet.</p>
+        </div>
+      )}
+
       {/* Driver cards */}
+      {view === 'list' && (
       <div className="px-5 flex flex-col gap-3">
         {drivers.length === 0 && (
           <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No EV drivers online right now — check back soon.</p>
@@ -488,6 +527,7 @@ function DriversTab({ onBookDriver }) {
           </div>
         ))}
       </div>
+      )}
 
       {/* Drivo Guarantee */}
       <div className="px-5 mt-5">
@@ -502,9 +542,15 @@ function DriversTab({ onBookDriver }) {
         </div>
       </div>
 
-      {/* Stats */}
+      {/* Stats — real counts from the drivers already fetched above, split
+          by vehicle type. Was hardcoded '142 Active EV' / '1.2k kg CO2
+          Saved Today', frozen regardless of reality — visibly contradicted
+          the real "No EV drivers online" empty state on the same screen. */}
       <div className="px-5 mt-4 grid grid-cols-2 gap-3">
-        {[{ label: 'kg CO2 Saved Today', value: '1.2k' }, { label: 'Active EV', value: '142' }].map(({ label, value }) => (
+        {[
+          { label: 'EV Auto Online', value: String(drivers.filter(d => d.vehicleType === 'ev_auto').length) },
+          { label: 'EV Car Online',  value: String(drivers.filter(d => d.vehicleType === 'ev_car').length) },
+        ].map(({ label, value }) => (
           <div key={label} style={{ background: 'var(--color-primary)', borderRadius: 14, padding: 16 }}>
             <p style={{ fontSize: 22, fontWeight: 700, color: 'white' }}>{value}</p>
             <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', marginTop: 2 }}>{label}</p>
@@ -513,6 +559,7 @@ function DriversTab({ onBookDriver }) {
       </div>
 
       {/* Explore Map View */}
+      {view === 'list' && (
       <div className="flex justify-center mt-5">
         <button onClick={() => setView('map')}
           style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 24px', background: 'var(--color-on-surface)', color: 'white', borderRadius: 9999, border: 'none', fontSize: 14, fontWeight: 600, cursor: 'pointer', boxShadow: '0 4px 16px rgba(26,43,60,0.2)' }}>
@@ -520,6 +567,7 @@ function DriversTab({ onBookDriver }) {
           Explore Map View
         </button>
       </div>
+      )}
     </div>
   )
 }
