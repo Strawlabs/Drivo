@@ -3,25 +3,11 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { notifyDriverProfile } from '@/lib/notifications'
+import { KNOWN_LOCATIONS } from '@/lib/locations'
 
 const VEHICLE_OPTIONS = [
   { id: 'luxe',  label: 'Drivo Luxe',  sub: 'EV Sedan · 4 min',  icon: 'electric_car',      fare: 284 },
   { id: 'space', label: 'Drivo Space', sub: 'EV SUV · 7 min',    icon: 'directions_car',    fare: 380 },
-]
-
-// Without a real geocoding/Maps integration, pickup and destination are a
-// picker over known Bangalore areas rather than free text — was previously
-// hardcoded to a single fixed pair with no way to change either one at all.
-const KNOWN_LOCATIONS = [
-  'Koramangala 5th Block',
-  'MG Road Metro Station',
-  'HSR Layout Sector 2',
-  'Indiranagar 100 Ft Road',
-  'Whitefield ITPL Gate',
-  'Electronic City Phase 1',
-  'Silk Board Junction',
-  'Jayanagar 4th Block',
-  'Bellandur Lake Road',
 ]
 
 export default function BookRidePage() {
@@ -37,6 +23,7 @@ export default function BookRidePage() {
 
   const [selected, setSelected]   = useState('luxe')
   const [confirming, setConfirming] = useState(false)
+  const [locationError, setLocationError] = useState('')
 
   function handleSwap() {
     setPickup(destination)
@@ -44,9 +31,15 @@ export default function BookRidePage() {
   }
 
   const fare = VEHICLE_OPTIONS.find(v => v.id === selected).fare
+  const sameLocation = pickup === destination
 
   async function handleConfirm() {
     if (confirming || !user) return
+    if (sameLocation) {
+      setLocationError("Pickup and destination can't be the same place.")
+      return
+    }
+    setLocationError('')
     setConfirming(true)
     try {
       const { data, error } = await supabase.from('rides').insert({
@@ -197,9 +190,15 @@ export default function BookRidePage() {
           <span style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>Pay via UPI or cash after your ride</span>
         </div>
 
+        {(locationError || sameLocation) && (
+          <p style={{ fontSize: 13, color: 'var(--color-error)', marginBottom: 12, textAlign: 'center' }}>
+            {locationError || "Pickup and destination can't be the same place."}
+          </p>
+        )}
+
         {/* CTA */}
-        <button onClick={handleConfirm} disabled={confirming}
-          style={{ width: '100%', height: 52, background: 'var(--color-primary-container)', color: 'var(--color-on-primary-container)', border: 'none', borderRadius: 12, fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: confirming ? 'not-allowed' : 'pointer', opacity: confirming ? 0.7 : 1, boxShadow: '0 4px 16px rgba(0,109,55,0.2)' }}>
+        <button onClick={handleConfirm} disabled={confirming || sameLocation}
+          style={{ width: '100%', height: 52, background: 'var(--color-primary-container)', color: 'var(--color-on-primary-container)', border: 'none', borderRadius: 12, fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: (confirming || sameLocation) ? 'not-allowed' : 'pointer', opacity: (confirming || sameLocation) ? 0.6 : 1, boxShadow: '0 4px 16px rgba(0,109,55,0.2)' }}>
           {confirming ? 'Confirming…' : 'Confirm Ride'}
           {!confirming && <span className="material-symbols-outlined">chevron_right</span>}
         </button>
