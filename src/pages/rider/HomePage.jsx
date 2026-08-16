@@ -35,6 +35,41 @@ function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
   )
 }
 
+// Replaces the Material Symbols icon-font glyphs on the Home tab, which
+// read as a mismatched cartoon style next to this app's hand-drawn line
+// icons elsewhere (search bar, schedule button, etc.) — same stroke
+// weight/rounding as those instead.
+function AutoIcon({ size = 32, color = 'var(--color-primary)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 16V9a2 2 0 0 1 2-2h6l3 4h3a2 2 0 0 1 2 2v3"/>
+      <path d="M4 16h14M4 12h3"/>
+      <circle cx="7" cy="18" r="1.6"/>
+      <circle cx="17" cy="18" r="1.6"/>
+    </svg>
+  )
+}
+
+function CarIcon({ size = 32, color = 'var(--color-primary)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 13l1.5-4.5A2 2 0 0 1 6.4 7h11.2a2 2 0 0 1 1.9 1.5L21 13"/>
+      <rect x="2" y="13" width="20" height="5" rx="2"/>
+      <circle cx="7" cy="18" r="1.6"/>
+      <circle cx="17" cy="18" r="1.6"/>
+    </svg>
+  )
+}
+
+function LeafIcon({ size = 32, color = 'var(--color-primary)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 21c8 0 14-6 14-14V5h-2C9 5 5 11 5 19v2z"/>
+      <path d="M5 21c3-6 6-9 12-12"/>
+    </svg>
+  )
+}
+
 // ── TAB: Home ───────────────────────────────────────────────────
 function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDrivers, userId }) {
   const [search, setSearch] = useState('')
@@ -51,9 +86,12 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
   }, [userId])
 
   return (
-    <>
+    // Desktop-only 2-column split (Nearby Drivers + Eco-Warrior move into a
+    // side rail) — grid only turns on at the lg breakpoint, so phones/narrow
+    // viewports render this exactly as before, unchanged, in source order.
+    <div className="lg:grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 340px', columnGap: 24, gridAutoFlow: 'row dense' }}>
       {/* Greeting */}
-      <section className="px-5 mt-6 mb-6">
+      <section className="px-5 mt-6 mb-6" style={{ gridColumn: 1 }}>
         <h2 style={{ fontSize: 24, fontWeight: 600, lineHeight: '32px', color: 'var(--color-on-surface)' }}>
           {greeting}, {firstName}
         </h2>
@@ -63,7 +101,7 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
       </section>
 
       {/* Search Bar */}
-      <section className="px-5 mb-8">
+      <section className="px-5 mb-8" style={{ gridColumn: 1 }}>
         <div className="relative flex items-center">
           <span className="absolute pointer-events-none" style={{ left: 16 }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -98,7 +136,7 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
       </section>
 
       {/* Map Snippet */}
-      <section className="px-5 mb-8">
+      <section className="px-5 mb-8" style={{ gridColumn: 1 }}>
         <div className="relative overflow-hidden" style={{ height: 192, borderRadius: 16, boxShadow: '0 4px 16px rgba(26,43,60,0.12)' }}>
           <div className="w-full h-full" style={{ background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)', position: 'relative', overflow: 'hidden' }}>
             {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(46,204,113,0.12)' }} />)}
@@ -119,13 +157,13 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
       </section>
 
       {/* Quick Categories */}
-      <section className="px-5 mb-8">
+      <section className="px-5 mb-8" style={{ gridColumn: 1 }}>
         <div className="flex justify-between items-center mb-4">
           <h3 style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-on-surface)' }}>Quick Categories</h3>
           <button onClick={onBrowseDrivers} style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer' }}>View All</button>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          {[{ label: 'EV Auto', icon: 'electric_rickshaw' }, { label: 'EV Car', icon: 'electric_car' }].map(({ label, icon }) => (
+          {[{ label: 'EV Auto', Icon: AutoIcon }, { label: 'EV Car', Icon: CarIcon }].map(({ label, Icon }) => (
             <button
               key={label}
               onClick={onBrowseDrivers}
@@ -135,7 +173,7 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
               onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(187,203,187,0.3)'; e.currentTarget.style.background = 'var(--color-surface)' }}
             >
               <div style={{ width: 64, height: 64, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-surface-container-highest)', borderRadius: '50%' }}>
-                <span className="material-symbols-outlined" style={{ fontSize: 32, color: 'var(--color-primary)' }}>{icon}</span>
+                <Icon size={30} />
               </div>
               <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-on-surface)' }}>{label}</span>
             </button>
@@ -144,7 +182,7 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
       </section>
 
       {/* Nearby Drivers */}
-      <section className="mb-8">
+      <section className="mb-8" style={{ gridColumn: 2 }}>
         <div className="flex justify-between items-center mb-4 px-5">
           <h3 style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-on-surface)' }}>Nearby Drivers</h3>
           <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-secondary)', background: 'var(--color-surface-container)', padding: '2px 10px', borderRadius: 9999 }}>
@@ -164,7 +202,9 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
                       <div className="flex items-center gap-1.5">
                         <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-on-surface)' }}>{driver.name}</p>
                         {driver.isPriority && (
-                          <span style={{ fontSize: 9, fontWeight: 700, color: '#b45309', background: 'rgba(245,158,11,0.14)', padding: '2px 6px', borderRadius: 9999 }}>⭐ PRIORITY</span>
+                          <span className="flex items-center gap-0.5" style={{ fontSize: 9, fontWeight: 700, color: '#b45309', background: 'rgba(245,158,11,0.14)', padding: '2px 6px', borderRadius: 9999 }}>
+                            <StarIcon size={9} /> PRIORITY
+                          </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1" style={{ marginTop: 2 }}>
@@ -193,7 +233,7 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
       </section>
 
       {/* Schedule a Ride */}
-      <section className="px-5 mb-8">
+      <section className="px-5 mb-8" style={{ gridColumn: 1 }}>
         <button
           onClick={onSchedule}
           className="w-full flex items-center justify-between"
@@ -217,7 +257,7 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
           that doesn't exist anywhere in this app. Same real all-time CO2
           estimate already shown honestly on the Profile tab; "rewards"
           claim dropped rather than left dangling. */}
-      <section className="px-5 mb-8">
+      <section className="px-5 mb-8" style={{ gridColumn: 2 }}>
         <div className="flex items-center justify-between" style={{ background: 'rgba(46,204,113,0.08)', border: '2px dashed var(--color-primary-container)', borderRadius: 16, padding: 20 }}>
           <div style={{ maxWidth: '60%' }}>
             <h4 style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-on-primary-container)', marginBottom: 4 }}>Eco-Warrior Status</h4>
@@ -226,11 +266,11 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
             </p>
           </div>
           <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--color-primary-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 32, color: 'var(--color-on-primary-container)' }}>eco</span>
+            <LeafIcon size={30} color="var(--color-on-primary-container)" />
           </div>
         </div>
       </section>
-    </>
+    </div>
   )
 }
 
@@ -902,7 +942,7 @@ export default function RiderHomePage() {
           was the one screen missing it, so on a wide viewport everything
           stretched edge-to-edge instead of reading as a phone-shaped app,
           making already tightly-spaced cards look sparse and crowded. */}
-      <main className="flex-1 overflow-y-auto pb-28" style={{ maxWidth: 480, width: '100%', margin: '0 auto' }}>
+      <main className="flex-1 overflow-y-auto pb-28" style={{ maxWidth: activeNav === 'home' ? 1100 : 480, width: '100%', margin: '0 auto' }}>
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} onBrowseDrivers={() => setActiveNav('drivers')} userId={user?.id} />}
         {activeNav === 'trips'   && <TripsTab userId={user?.id} />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}

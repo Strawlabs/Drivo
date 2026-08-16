@@ -18,10 +18,78 @@ function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
   )
 }
 
-function StarIcon() {
+function StarIcon({ size = 13, color = '#F59E0B' }) {
   return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="#F59E0B">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+    </svg>
+  )
+}
+
+// Replaces the Home tab's emoji icons (⏻ 🚗 💚 🎖️ 📍 💰 ⚡) with hand-drawn
+// line icons matching this app's SVG conventions elsewhere, instead of the
+// mismatched emoji-cartoon look.
+function PowerIcon({ size = 22, color = 'currentColor' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round">
+      <path d="M12 3v8"/>
+      <path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>
+    </svg>
+  )
+}
+
+function CarIcon({ size = 22, color = 'var(--color-primary)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 13l1.5-4.5A2 2 0 0 1 6.4 7h11.2a2 2 0 0 1 1.9 1.5L21 13"/>
+      <rect x="2" y="13" width="20" height="5" rx="2"/>
+      <circle cx="7" cy="18" r="1.6"/>
+      <circle cx="17" cy="18" r="1.6"/>
+    </svg>
+  )
+}
+
+function HeartIcon({ size = 22, color = 'var(--color-primary)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21.2l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/>
+    </svg>
+  )
+}
+
+function MedalIcon({ size = 22, color = 'var(--color-primary)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="15" r="6"/>
+      <path d="M9 3l3 5 3-5M9 3H6l2.5 6M15 3h3l-2.5 6"/>
+      <path d="M12 12v3l2 1.5"/>
+    </svg>
+  )
+}
+
+function PinIcon({ size = 22, color = 'var(--color-on-secondary-container)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 21s7-7.4 7-12a7 7 0 1 0-14 0c0 4.6 7 12 7 12z"/>
+      <circle cx="12" cy="9" r="2.4"/>
+    </svg>
+  )
+}
+
+function WalletIcon({ size = 22, color = 'var(--color-on-secondary-container)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="6" width="18" height="13" rx="2"/>
+      <path d="M3 10h18"/>
+      <circle cx="16.5" cy="14.5" r="1.2" fill={color} stroke="none"/>
+    </svg>
+  )
+}
+
+function BoltIcon({ size = 18, color = 'white' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/>
     </svg>
   )
 }
@@ -29,90 +97,99 @@ function StarIcon() {
 // ── TAB: Home ───────────────────────────────────────────────────
 function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome, onOpenPreferredRiders, onOpenEarnings, onOpenSubscription }) {
   return (
-    <main className="mx-auto px-5 pb-32" style={{ maxWidth: 480, paddingTop: 24 }}>
-      {/* Status Hero */}
-      <section className="mb-8 text-center">
-        <h1 style={{ fontSize: 40, fontWeight: 700, lineHeight: '48px', letterSpacing: '-0.02em', color: 'var(--color-on-background)', marginBottom: 4 }}>
-          {greeting}, {displayName}
-        </h1>
-        <p style={{ fontSize: 16, color: 'var(--color-secondary)', marginBottom: 24 }}>
-          Ready for a green commute today?
-        </p>
-        <div style={{ background: '#ffffff', borderRadius: 9999, padding: 8, boxShadow: '0px 4px 20px rgba(26,43,60,0.05)', border: isOnline ? '1px solid var(--color-primary)' : '1px solid #f1f5f9', transition: 'border 0.3s ease' }}>
-          <button
-            onClick={onToggle}
-            disabled={toggling}
-            className="flex items-center justify-center gap-3 w-full"
-            style={{ height: 56, borderRadius: 9999, border: 'none', background: isOnline ? 'var(--color-error)' : 'var(--color-primary)', color: '#ffffff', fontSize: 16, fontWeight: 600, cursor: toggling ? 'not-allowed' : 'pointer', opacity: toggling ? 0.7 : 1, transition: 'background 0.3s ease' }}
-          >
-            <span style={{ fontSize: 22 }}>⏻</span>
-            {toggling ? 'Updating…' : isOnline ? 'Go Offline' : 'Go Online'}
-          </button>
-        </div>
-      </section>
+    <main className="mx-auto px-5 pb-32" style={{ maxWidth: 1100, paddingTop: 24 }}>
+      {/* Desktop-only 2-column split (Quick Actions + Map move into a side
+          rail) — grid only turns on at the lg breakpoint, so phones/narrow
+          viewports render this exactly as before, in source order. */}
+      <div className="lg:grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 320px', columnGap: 24, gridAutoFlow: 'row dense' }}>
+        {/* Status Hero */}
+        <section className="mb-8 text-center" style={{ gridColumn: 1 }}>
+          <h1 style={{ fontSize: 40, fontWeight: 700, lineHeight: '48px', letterSpacing: '-0.02em', color: 'var(--color-on-background)', marginBottom: 4 }}>
+            {greeting}, {displayName}
+          </h1>
+          <p style={{ fontSize: 16, color: 'var(--color-secondary)', marginBottom: 24 }}>
+            Ready for a green commute today?
+          </p>
+          <div style={{ background: '#ffffff', borderRadius: 9999, padding: 8, boxShadow: '0px 4px 20px rgba(26,43,60,0.05)', border: isOnline ? '1px solid var(--color-primary)' : '1px solid #f1f5f9', transition: 'border 0.3s ease' }}>
+            <button
+              onClick={onToggle}
+              disabled={toggling}
+              className="flex items-center justify-center gap-3 w-full"
+              style={{ height: 56, borderRadius: 9999, border: 'none', background: isOnline ? 'var(--color-error)' : 'var(--color-primary)', color: '#ffffff', fontSize: 16, fontWeight: 600, cursor: toggling ? 'not-allowed' : 'pointer', opacity: toggling ? 0.7 : 1, transition: 'background 0.3s ease' }}
+            >
+              <PowerIcon size={22} color="#ffffff" />
+              {toggling ? 'Updating…' : isOnline ? 'Go Offline' : 'Go Online'}
+            </button>
+          </div>
+        </section>
 
-      {/* Stats Bento */}
-      <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 32 }}>
-        <div style={{ gridColumn: 'span 2', background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', position: 'relative', overflow: 'hidden' }}>
-          <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Today's Earnings</p>
-          <h2 style={{ fontSize: 40, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--color-primary)', lineHeight: '48px' }}>₹{todayEarnings.toFixed(2)}</h2>
-          <div className="flex items-center gap-1" style={{ marginTop: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-secondary)', letterSpacing: '0.05em' }}>
-              {todayTripsCount} {todayTripsCount === 1 ? 'ride' : 'rides'} paid today
+        {/* Stats Bento */}
+        <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 32, gridColumn: 1 }}>
+          <div style={{ gridColumn: 'span 2', background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', position: 'relative', overflow: 'hidden' }}>
+            <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Today's Earnings</p>
+            <h2 style={{ fontSize: 40, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--color-primary)', lineHeight: '48px' }}>₹{todayEarnings.toFixed(2)}</h2>
+            <div className="flex items-center gap-1" style={{ marginTop: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-secondary)', letterSpacing: '0.05em' }}>
+                {todayTripsCount} {todayTripsCount === 1 ? 'ride' : 'rides'} paid today
+              </span>
+            </div>
+            <div style={{ position: 'absolute', right: -32, bottom: -32, width: 128, height: 128, background: 'rgba(0,109,55,0.05)', borderRadius: '50%', filter: 'blur(24px)' }} />
+          </div>
+          {[
+            { Icon: CarIcon,   label: 'Trips',            value: String(todayTripsCount) },
+            { Icon: StarIcon,  label: 'Rating',            value: Number(driverRating).toFixed(2) },
+            { Icon: HeartIcon, label: 'Preferred Riders',  value: String(preferredRidersCount), onClick: onOpenPreferredRiders },
+            { Icon: MedalIcon, label: 'Subscription',      value: subscription?.subscription_plans?.name
+                ? subscription.subscription_plans.name.charAt(0).toUpperCase() + subscription.subscription_plans.name.slice(1)
+                : 'None' },
+          ].map(({ Icon, label, value, onClick }) => (
+            <div key={label} onClick={onClick} style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', cursor: onClick ? 'pointer' : 'default' }}>
+              <div style={{ marginBottom: 4 }}><Icon size={22} /></div>
+              <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>{label}</p>
+              <h3 style={{ fontSize: 24, fontWeight: 600, color: 'var(--color-on-surface)' }}>{value}</h3>
+            </div>
+          ))}
+        </section>
+
+        {/* Quick Actions */}
+        <div style={{ gridColumn: 2 }}>
+          <p style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 12 }}>Quick Actions</p>
+          <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 32 }}>
+            {[{ label: 'Go Home', Icon: PinIcon, onClick: onOpenGoHome }, { label: 'Earnings', Icon: WalletIcon, onClick: onOpenEarnings }, { label: 'Drivo+', Icon: MedalIcon, onClick: onOpenSubscription }].map(({ label, Icon, onClick }) => (
+              <button key={label} onClick={onClick} className="flex flex-col items-center gap-2" style={{ padding: 16, borderRadius: 12, border: 'none', background: 'transparent', cursor: onClick ? 'pointer' : 'default', transition: 'background 0.15s ease', position: 'relative' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--color-surface-container)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <div style={{ width: 56, height: 56, background: 'var(--color-secondary-container)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                  <Icon size={22} />
+                  {label === 'Go Home' && goHomeSession && (
+                    <span style={{ position: 'absolute', top: -2, right: -2, width: 12, height: 12, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid white' }} />
+                  )}
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-on-surface)', textAlign: 'center' }}>{label}</span>
+              </button>
+            ))}
+          </section>
+        </div>
+
+        {/* Map */}
+        <section style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(26,43,60,0.06)', gridColumn: 2 }}>
+          <div className="flex justify-between items-center" style={{ padding: '12px 16px', borderBottom: '1px solid #f1f5f9' }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)' }}>Near You</span>
+            <span className="flex items-center gap-1.5" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-primary)' }}>
+              High Demand
+              <span style={{ width: 8, height: 8, background: 'var(--color-primary-container)', borderRadius: '50%', display: 'inline-block', animation: 'mapPulse 2s infinite' }} />
             </span>
           </div>
-          <div style={{ position: 'absolute', right: -32, bottom: -32, width: 128, height: 128, background: 'rgba(0,109,55,0.05)', borderRadius: '50%', filter: 'blur(24px)' }} />
-        </div>
-        {[
-          { icon: '🚗', label: 'Trips',            value: String(todayTripsCount) },
-          { icon: '⭐', label: 'Rating',            value: Number(driverRating).toFixed(2) },
-          { icon: '💚', label: 'Preferred Riders',  value: String(preferredRidersCount), onClick: onOpenPreferredRiders },
-          { icon: '🎖️', label: 'Subscription',      value: subscription?.subscription_plans?.name
-              ? subscription.subscription_plans.name.charAt(0).toUpperCase() + subscription.subscription_plans.name.slice(1)
-              : 'None' },
-        ].map(({ icon, label, value, onClick }) => (
-          <div key={label} onClick={onClick} style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', cursor: onClick ? 'pointer' : 'default' }}>
-            <span style={{ fontSize: 22, marginBottom: 4 }}>{icon}</span>
-            <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>{label}</p>
-            <h3 style={{ fontSize: 24, fontWeight: 600, color: 'var(--color-on-surface)' }}>{value}</h3>
-          </div>
-        ))}
-      </section>
-
-      {/* Quick Actions */}
-      <p style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 12 }}>Quick Actions</p>
-      <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 32 }}>
-        {[{ label: 'Go Home', icon: '📍', onClick: onOpenGoHome }, { label: 'Earnings', icon: '💰', onClick: onOpenEarnings }, { label: 'Drivo+', icon: '🎖️', onClick: onOpenSubscription }].map(({ label, icon, onClick }) => (
-          <button key={label} onClick={onClick} className="flex flex-col items-center gap-2" style={{ padding: 16, borderRadius: 12, border: 'none', background: 'transparent', cursor: onClick ? 'pointer' : 'default', transition: 'background 0.15s ease', position: 'relative' }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--color-surface-container)'}
-            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-          >
-            <div style={{ width: 56, height: 56, background: 'var(--color-secondary-container)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, position: 'relative' }}>
-              {icon}
-              {label === 'Go Home' && goHomeSession && (
-                <span style={{ position: 'absolute', top: -2, right: -2, width: 12, height: 12, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid white' }} />
-              )}
+          <div style={{ height: 160, position: 'relative', background: 'linear-gradient(135deg, #e8ecef 0%, #d4dce8 100%)' }}>
+            {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(100,116,139,0.2)' }} />)}
+            {[15, 30, 50, 65, 80].map(p => <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(100,116,139,0.2)' }} />)}
+            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 40, height: 40, background: 'var(--color-primary)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'carPulse 2s infinite' }}>
+              <BoltIcon size={18} />
             </div>
-            <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-on-surface)', textAlign: 'center' }}>{label}</span>
-          </button>
-        ))}
-      </section>
-
-      {/* Map */}
-      <section style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(26,43,60,0.06)' }}>
-        <div className="flex justify-between items-center" style={{ padding: '12px 16px', borderBottom: '1px solid #f1f5f9' }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)' }}>Near You</span>
-          <span className="flex items-center gap-1.5" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-primary)' }}>
-            High Demand
-            <span style={{ width: 8, height: 8, background: 'var(--color-primary-container)', borderRadius: '50%', display: 'inline-block', animation: 'mapPulse 2s infinite' }} />
-          </span>
-        </div>
-        <div style={{ height: 160, position: 'relative', background: 'linear-gradient(135deg, #e8ecef 0%, #d4dce8 100%)' }}>
-          {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(100,116,139,0.2)' }} />)}
-          {[15, 30, 50, 65, 80].map(p => <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(100,116,139,0.2)' }} />)}
-          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 40, height: 40, background: 'var(--color-primary)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 18, animation: 'carPulse 2s infinite' }}>⚡</div>
-        </div>
-      </section>
+          </div>
+        </section>
+      </div>
     </main>
   )
 }
