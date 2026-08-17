@@ -6,6 +6,8 @@ import { fetchAvailableDrivers } from '@/lib/drivers'
 import { fetchPreferredDriversForRider, removePreferredDriver, fetchSubscriptionTier, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
 import { dispatchDueScheduledRides, sendDueReminders } from '@/lib/family'
 import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
+import { KNOWN_LOCATIONS, LOCATION_COORDS } from '@/lib/locations'
+import RealMap from '@/components/RealMap'
 
 // ── Small shared components ─────────────────────────────────────
 function StarIcon({ filled = true, size = 13 }) {
@@ -135,19 +137,20 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
         </div>
       </section>
 
-      {/* Map Snippet */}
+      {/* Map Snippet — real OpenStreetMap tiles over Bangalore, with markers
+          at this app's real known service-area coordinates (locations.js) —
+          no per-driver GPS exists anywhere in this app (drivers never
+          submit a live location), so this deliberately doesn't claim to
+          plot individual drivers, just real named places EVs operate in.
+          Replaces the earlier stylized SVG placeholder. */}
       <section className="px-5 mb-8" style={{ gridColumn: 1 }}>
         <div className="relative overflow-hidden" style={{ height: 192, borderRadius: 16, boxShadow: '0 4px 16px rgba(26,43,60,0.12)' }}>
-          <div className="w-full h-full" style={{ background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)', position: 'relative', overflow: 'hidden' }}>
-            {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(46,204,113,0.12)' }} />)}
-            {[15, 30, 50, 65, 80].map(p => <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(46,204,113,0.12)' }} />)}
-            <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} viewBox="0 0 100 100" preserveAspectRatio="none">
-              <path d="M12 78 Q30 45 45 52 Q60 59 75 32 L85 22" stroke="#2ecc71" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity="0.8" vectorEffect="non-scaling-stroke"/>
-              <circle cx="12" cy="78" r="2" fill="#2ecc71" opacity="0.9"/>
-              <circle cx="85" cy="22" r="2" fill="#4ae183"/>
-              <circle cx="85" cy="22" r="4.5" fill="none" stroke="#4ae183" strokeWidth="0.8" opacity="0.4" vectorEffect="non-scaling-stroke"/>
-            </svg>
-          </div>
+          <RealMap
+            center={[12.9611, 77.6387]}
+            zoom={11}
+            interactive={false}
+            markers={KNOWN_LOCATIONS.map(loc => ({ id: loc, type: 'dot', position: [LOCATION_COORDS[loc].lat, LOCATION_COORDS[loc].lng] }))}
+          />
           <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.18), transparent)', pointerEvents: 'none' }} />
           <div className="absolute flex items-center gap-1.5" style={{ bottom: 12, left: 12, background: 'rgba(248,249,255,0.92)', backdropFilter: 'blur(12px)', borderRadius: 9999, padding: '4px 10px', boxShadow: '0 2px 8px rgba(26,43,60,0.12)', border: '1px solid var(--color-outline-variant)' }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-primary)', display: 'inline-block', animation: 'livePulse 2s infinite' }} />
@@ -503,39 +506,31 @@ function DriversTab({ onBookDriver }) {
         </div>
       </div>
 
-      {/* Map view — same stylized illustrative treatment used on Home/
-          Book Ride/Active Ride elsewhere in this app (no real Maps/geo
-          integration exists anywhere here), but plotting the real online
-          drivers instead of being a dead toggle that changed nothing. */}
+      {/* Map view — real OpenStreetMap tiles over Bangalore. Drivers still
+          don't submit any real GPS anywhere in this app, so their pins are
+          a deterministic scatter around a real central point rather than a
+          fabricated precise location — same honesty tradeoff as before,
+          just plotted on a real map now instead of a stylized placeholder. */}
       {view === 'map' && (
         <div className="px-5 mb-3">
           <div className="relative overflow-hidden" style={{ height: 280, borderRadius: 16, boxShadow: '0 4px 16px rgba(26,43,60,0.12)' }}>
-            <div className="w-full h-full" style={{ background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)', position: 'relative', overflow: 'hidden' }}>
-              {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(46,204,113,0.12)' }} />)}
-              {[15, 30, 50, 65, 80].map(p => <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(46,204,113,0.12)' }} />)}
-              {filteredDrivers.length === 0 ? (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>No EV drivers online right now</p>
-                </div>
-              ) : (
-                filteredDrivers.map((driver, i) => {
-                  // No live GPS is submitted anywhere in this app (no geocoding
-                  // integration), so these are an illustrative scatter, not real
-                  // coordinates — deliberately not faking a precise location.
-                  const left = 15 + ((i * 37) % 70)
-                  const top = 20 + ((i * 53) % 60)
-                  return (
-                    <button key={driver.id} onClick={() => navigate(`/rider/driver/${driver.id}`)}
-                      style={{ position: 'absolute', left: `${left}%`, top: `${top}%`, transform: 'translate(-50%, -50%)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.4)' }}>
-                        {driver.avatar}
-                      </div>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: 'white', background: 'rgba(11,28,48,0.7)', padding: '1px 6px', borderRadius: 6, whiteSpace: 'nowrap' }}>{driver.name}</span>
-                    </button>
-                  )
-                })
-              )}
-            </div>
+            {filteredDrivers.length === 0 ? (
+              <div className="w-full h-full flex items-center justify-center" style={{ background: '#0f1923' }}>
+                <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>No EV drivers online right now</p>
+              </div>
+            ) : (
+              <RealMap
+                center={[12.9611, 77.6387]}
+                zoom={12}
+                interactive={true}
+                markers={filteredDrivers.map((driver, i) => ({
+                  id: driver.id,
+                  type: 'driver',
+                  position: [12.9611 + (((i * 37) % 70) - 35) * 0.0015, 77.6387 + (((i * 53) % 60) - 30) * 0.0015],
+                  onClick: () => navigate(`/rider/driver/${driver.id}`),
+                }))}
+              />
+            )}
           </div>
           <p style={{ fontSize: 11, color: 'var(--color-secondary)', marginTop: 8, textAlign: 'center' }}>Illustrative positions — live GPS tracking isn't wired up yet.</p>
         </div>

@@ -1,10 +1,12 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { notifyDriverProfile } from '@/lib/notifications'
-import { KNOWN_LOCATIONS } from '@/lib/locations'
+import { KNOWN_LOCATIONS, LOCATION_COORDS } from '@/lib/locations'
 import { estimateFare } from '@/lib/fare'
+import { fetchDrivingRoute } from '@/lib/routing'
+import RealMap from '@/components/RealMap'
 
 const VEHICLE_TYPES = [
   { id: 'luxe',  label: 'Drivo Luxe',  type: 'EV Sedan', icon: 'electric_car' },
@@ -32,6 +34,19 @@ export default function BookRidePage() {
   }
 
   const sameLocation = pickup === destination
+
+  // Real driving route between the two selected real coordinates, refetched
+  // whenever either changes. Falls back to a straight line if OSRM is
+  // unreachable (src/lib/routing.js) rather than breaking the map.
+  const [routeCoords, setRouteCoords] = useState([])
+  useEffect(() => {
+    const from = LOCATION_COORDS[pickup]
+    const to = LOCATION_COORDS[destination]
+    if (!from || !to || sameLocation) { setRouteCoords([]); return }
+    let cancelled = false
+    fetchDrivingRoute(from, to).then(route => { if (!cancelled) setRouteCoords(route.coordinates) })
+    return () => { cancelled = true }
+  }, [pickup, destination, sameLocation])
 
   const vehicleOptions = useMemo(() => VEHICLE_TYPES.map(v => {
     const { fare, distanceKm, etaMin } = estimateFare(pickup, destination, v.id)
@@ -98,28 +113,24 @@ export default function BookRidePage() {
         </div>
       </header>
 
-      {/* Map placeholder */}
+      {/* Map — real OpenStreetMap tiles, real pickup/destination coordinates,
+          real driving route via OSRM (re-fetched whenever either location
+          changes). Replaces the earlier stylized SVG placeholder. */}
       <div className="relative flex-1" style={{ minHeight: 220 }}>
-        <div className="absolute inset-0" style={{ background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)' }}>
-          {[20,40,60,80].map(p => <div key={`h${p}`} style={{ position:'absolute', top:`${p}%`, left:0, right:0, height:1, background:'rgba(46,204,113,0.12)' }} />)}
-          {[15,30,50,65,80].map(p => <div key={`v${p}`} style={{ position:'absolute', left:`${p}%`, top:0, bottom:0, width:1, background:'rgba(46,204,113,0.12)' }} />)}
-          <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%' }} viewBox="0 0 360 220" preserveAspectRatio="none">
-            <path d="M60 180 Q110 100 170 120 Q220 140 280 70 L320 50" stroke="#2ecc71" strokeWidth="2.5" strokeLinecap="round" fill="none" opacity="0.9"/>
-            <circle cx="60" cy="180" r="6" fill="#2ecc71"/>
-            <circle cx="320" cy="50" r="6" fill="#4ae183"/>
-            <circle cx="320" cy="50" r="12" fill="none" stroke="#4ae183" strokeWidth="1.5" opacity="0.5"/>
-          </svg>
-        </div>
-        {/* Pickup label */}
-        <div style={{ position:'absolute', top:'32%', left:'14%', background:'white', padding:'4px 10px', borderRadius:8, boxShadow:'0 2px 8px rgba(0,0,0,0.15)' }}>
-          <p style={{ fontSize:11, fontWeight:600, color:'var(--color-on-surface)' }}>Pickup: {pickup.split(',')[0]}</p>
-        </div>
-        {/* Destination label */}
-        <div style={{ position:'absolute', top:'16%', right:'12%', background:'var(--color-primary)', padding:'4px 10px', borderRadius:8, boxShadow:'0 2px 8px rgba(0,0,0,0.15)' }}>
-          <p style={{ fontSize:11, fontWeight:600, color:'white' }}>{destination.split(' ').slice(0,2).join(' ')}</p>
-        </div>
-        {/* Gradient scrim */}
-        <div style={{ position:'absolute', inset:0, background:'linear-gradient(to bottom, rgba(248,249,255,0.7) 0%, rgba(248,249,255,0) 20%, rgba(248,249,255,0) 60%, rgba(248,249,255,1) 95%)', pointerEvents:'none' }} />
+        <RealMap
+          center={LOCATION_COORDS[pickup] ? [LOCATION_COORDS[pickup].lat, LOCATION_COORDS[pickup].lng] : [12.9716, 77.5946]}
+          zoom={13}
+          interactive={false}
+          bounds={!sameLocation && LOCATION_COORDS[pickup] && LOCATION_COORDS[destination] ? [
+            [LOCATION_COORDS[pickup].lat, LOCATION_COORDS[pickup].lng],
+            [LOCATION_COORDS[destination].lat, LOCATION_COORDS[destination].lng],
+          ] : null}
+          route={routeCoords}
+          markers={[
+            LOCATION_COORDS[pickup] && { id: 'pickup', type: 'dot', color: 'var(--color-primary)', position: [LOCATION_COORDS[pickup].lat, LOCATION_COORDS[pickup].lng] },
+            !sameLocation && LOCATION_COORDS[destination] && { id: 'destination', type: 'pin', color: '#4ae183', position: [LOCATION_COORDS[destination].lat, LOCATION_COORDS[destination].lng] },
+          ].filter(Boolean)}
+        />
       </div>
 
       {/* Bottom sheet */}

@@ -6,33 +6,9 @@ import { fetchAvailableDrivers } from '@/lib/drivers'
 import { notifyDriverProfile } from '@/lib/notifications'
 import { triggerSos, createSharedTripLink } from '@/lib/safety'
 import { distanceKmBetween } from '@/lib/fare'
-
-// Route drawn as percentage waypoints (viewBox 0 0 100 100, non-uniform
-// scaling) so it always spans the visible map edge-to-edge regardless of
-// the container's aspect ratio — a fixed portrait-shaped path clipped
-// itself on wide viewports before this.
-const ROUTE_WAYPOINTS = [
-  { x: 18, y: 82 },
-  { x: 38, y: 62 },
-  { x: 55, y: 68 },
-  { x: 72, y: 38 },
-  { x: 85, y: 20 },
-]
-
-function pointAtProgress(waypoints, progressPct) {
-  const t = Math.min(100, Math.max(0, progressPct)) / 100
-  const segCount = waypoints.length - 1
-  const segF = t * segCount
-  const i = Math.min(segCount - 1, Math.floor(segF))
-  const localT = segF - i
-  const a = waypoints[i]
-  const b = waypoints[i + 1]
-  return { x: a.x + (b.x - a.x) * localT, y: a.y + (b.y - a.y) * localT }
-}
-
-function routeToPath(waypoints) {
-  return waypoints.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x} ${p.y}`).join(' ')
-}
+import { LOCATION_COORDS } from '@/lib/locations'
+import { fetchDrivingRoute, pointAlongRoute } from '@/lib/routing'
+import RealMap from '@/components/RealMap'
 
 export default function ActiveRidePage() {
   const navigate = useNavigate()
@@ -79,26 +55,28 @@ export default function ActiveRidePage() {
     return () => observer.disconnect()
   }, [rideStatus])
 
-  // The bottom sheet covers roughly the lower half of the map (it's
-  // content-sized, not a fixed fraction), but the route/car marker were
-  // positioned as percentages of the FULL map div — so most of the route,
-  // including the car marker itself, ended up rendered behind the sheet
-  // and was never visible at all. Measure the sheet like the header above
-  // and only place the route within the strip actually visible above it.
-  const sheetRef = useRef(null)
-  const [sheetHeight, setSheetHeight] = useState(280)
-  useEffect(() => {
-    if (!sheetRef.current) return
-    const el = sheetRef.current
-    const update = () => setSheetHeight(el.getBoundingClientRect().height)
-    update()
-    const observer = new ResizeObserver(update)
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [rideStatus])
-
   const fareRef = useRef(fare)
   fareRef.current = fare
+
+  // Real driving route between the two real coordinates already resolved
+  // for these named locations (src/lib/locations.js) — fetched once per
+  // ride via OSRM's free public routing server. Falls back to a straight
+  // line between the same two real points if OSRM is unreachable (see
+  // src/lib/routing.js), so the map never breaks, only degrades.
+  const [routeCoords, setRouteCoords] = useState([])
+  const [routeDistanceKm, setRouteDistanceKm] = useState(null)
+  useEffect(() => {
+    const from = LOCATION_COORDS[pickup]
+    const to = LOCATION_COORDS[destination]
+    if (!from || !to) return
+    let cancelled = false
+    fetchDrivingRoute(from, to).then(route => {
+      if (cancelled) return
+      setRouteCoords(route.coordinates)
+      setRouteDistanceKm(route.isRealRoute ? route.distanceKm : null)
+    })
+    return () => { cancelled = true }
+  }, [pickup, destination])
 
   // Re-sync local state when navigated to a different ride (e.g. requesting
   // an alternate driver reuses this same route, so mount-only useState
@@ -130,10 +108,14 @@ export default function ActiveRidePage() {
     setEta(Math.max(0, Math.round(initialEtaMin * (1 - progress / 100))))
   }, [progress, initialEtaMin])
 
-  const distanceTraveledKm = Math.round(totalDistanceKm * (progress / 100) * 10) / 10
-  const distanceRemainingKm = Math.round((totalDistanceKm - totalDistanceKm * (progress / 100)) * 10) / 10
-  const carPos = pointAtProgress(ROUTE_WAYPOINTS, progress)
-  const traveledWaypoints = [...ROUTE_WAYPOINTS.slice(0, Math.floor((progress / 100) * (ROUTE_WAYPOINTS.length - 1)) + 1), carPos]
+  // Prefer OSRM's real road distance once it's back; the haversine-based
+  // estimate from booking (totalDistanceKm) is the fallback while it loads
+  // or if routing failed, so the numbers never show a gap or flash to 0.
+  const effectiveDistanceKm = routeDistanceKm ?? totalDistanceKm
+  const distanceTraveledKm = Math.round(effectiveDistanceKm * (progress / 100) * 10) / 10
+  const distanceRemainingKm = Math.round((effectiveDistanceKm - effectiveDistanceKm * (progress / 100)) * 10) / 10
+  const carPos = pointAlongRoute(routeCoords, progress / 100)
+  const traveledRoute = carPos ? [...routeCoords.slice(0, Math.max(1, Math.round((progress / 100) * (routeCoords.length - 1)))), carPos] : []
 
   // Supabase realtime — listen for ride status changes
   useEffect(() => {
@@ -365,49 +347,25 @@ export default function ActiveRidePage() {
         </div>
       </header>
 
-      {/* Map — route drawn in percentage coordinates (viewBox 0 0 100 100)
-          so it always fills the visible area edge-to-edge regardless of
-          the container's aspect ratio, instead of a fixed portrait-shaped
-          path that clipped itself on wide viewports. */}
-      <div style={{ position: 'fixed', inset: 0, top: headerHeight, background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)' }}>
-        {[20,40,60,80].map(p => <div key={`h${p}`} style={{ position:'absolute', top:`${p}%`, left:0, right:0, height:1, background:'rgba(46,204,113,0.1)' }} />)}
-        {[15,30,50,65,80].map(p => <div key={`v${p}`} style={{ position:'absolute', left:`${p}%`, top:0, bottom:0, width:1, background:'rgba(46,204,113,0.1)' }} />)}
-
-        {/* Route layer — sized to stop exactly where the bottom sheet
-            begins (measured via sheetHeight above), not the full map div.
-            Percentage coordinates below are relative to THIS box, so the
-            whole route — including the car marker — stays within the
-            strip that's actually visible above the sheet. */}
-        <div style={{ position:'absolute', top:0, left:0, right:0, bottom: sheetHeight }}>
-          <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%' }} viewBox="0 0 100 100" preserveAspectRatio="none">
-            {/* Full route, faint */}
-            <path d={routeToPath(ROUTE_WAYPOINTS)} stroke="#2ecc71" strokeWidth="1" strokeLinecap="round" fill="none" opacity="0.25" vectorEffect="non-scaling-stroke"/>
-            {/* Covered portion, solid — grows as progress advances */}
-            <path d={routeToPath(traveledWaypoints)} stroke="#2ecc71" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity="0.95" vectorEffect="non-scaling-stroke"/>
-            <circle cx={ROUTE_WAYPOINTS[0].x} cy={ROUTE_WAYPOINTS[0].y} r="1.2" fill="#2ecc71"/>
-          </svg>
-          {/* Car marker — moves along the route as progress ticks up */}
-          <div style={{ position:'absolute', top:`${carPos.y}%`, left:`${carPos.x}%`, transform:'translate(-50%, -50%)', transition:'top 3s linear, left 3s linear' }}>
-            <div style={{ position:'relative', display:'flex', alignItems:'center', justifyContent:'center' }}>
-              <div style={{ position:'absolute', width:48, height:48, borderRadius:'50%', background:'rgba(0,109,55,0.2)', animation:'ripple 2s infinite ease-in-out' }} />
-              <div style={{ width:24, height:24, borderRadius:'50%', background:'var(--color-primary)', border:'2px solid white', display:'flex', alignItems:'center', justifyContent:'center', position:'relative', zIndex:1 }}>
-                <span className="material-symbols-outlined" style={{ fontSize:14, color:'white' }}>navigation</span>
-              </div>
-            </div>
-          </div>
-          {/* Destination label — anchored to the route's real endpoint */}
-          <div style={{ position:'absolute', top:`${ROUTE_WAYPOINTS[ROUTE_WAYPOINTS.length - 1].y}%`, left:`${ROUTE_WAYPOINTS[ROUTE_WAYPOINTS.length - 1].x}%`, transform:'translate(-50%, -100%)' }}>
-            <div style={{ background:'var(--color-on-surface)', color:'white', padding:'4px 10px', borderRadius:8, fontSize:11, fontWeight:600, marginBottom:6, boxShadow:'0 2px 8px rgba(0,0,0,0.3)', whiteSpace:'nowrap' }}>
-              {destination.split(' ').slice(0,2).join(' ')}
-            </div>
-            <div style={{ width:32, height:32, background:'var(--color-on-surface)', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 4px 12px rgba(0,0,0,0.3)', margin:'0 auto' }}>
-              <span className="material-symbols-outlined" style={{ fontSize:18, color:'white', fontVariationSettings:"'FILL' 1" }}>location_on</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Gradient scrim bottom */}
-        <div style={{ position:'absolute', inset:0, background:'linear-gradient(to bottom, rgba(248,249,255,0.7) 0%, rgba(248,249,255,0) 20%, rgba(248,249,255,0) 65%, rgba(248,249,255,0.9) 100%)', pointerEvents:'none' }} />
+      {/* Map — a real OpenStreetMap (dark basemap), real driving route via
+          OSRM between this trip's actual pickup/destination coordinates,
+          and a car marker that moves along the real route geometry as
+          progress advances. Replaces the earlier stylized SVG placeholder. */}
+      <div style={{ position: 'fixed', inset: 0, top: headerHeight }}>
+        <RealMap
+          center={LOCATION_COORDS[pickup] ? [LOCATION_COORDS[pickup].lat, LOCATION_COORDS[pickup].lng] : [12.9716, 77.5946]}
+          zoom={13}
+          bounds={LOCATION_COORDS[pickup] && LOCATION_COORDS[destination] ? [
+            [LOCATION_COORDS[pickup].lat, LOCATION_COORDS[pickup].lng],
+            [LOCATION_COORDS[destination].lat, LOCATION_COORDS[destination].lng],
+          ] : null}
+          route={routeCoords}
+          markers={[
+            LOCATION_COORDS[pickup] && { id: 'pickup', type: 'dot', color: 'var(--color-primary)', position: [LOCATION_COORDS[pickup].lat, LOCATION_COORDS[pickup].lng] },
+            LOCATION_COORDS[destination] && { id: 'destination', type: 'pin', color: 'var(--color-on-surface)', position: [LOCATION_COORDS[destination].lat, LOCATION_COORDS[destination].lng] },
+            carPos && { id: 'car', type: 'car', position: carPos },
+          ].filter(Boolean)}
+        />
       </div>
 
       {/* Floating SOS — anchored to the header's measured height (see
@@ -490,7 +448,7 @@ export default function ActiveRidePage() {
       </div>
 
       {/* Bottom sheet */}
-      <div ref={sheetRef} style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:60, background:'var(--color-surface)', borderTopLeftRadius:24, borderTopRightRadius:24, boxShadow:'0 -10px 30px rgba(26,43,60,0.12)', maxHeight:'60vh', overflowY:'auto' }}>
+      <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:60, background:'var(--color-surface)', borderTopLeftRadius:24, borderTopRightRadius:24, boxShadow:'0 -10px 30px rgba(26,43,60,0.12)', maxHeight:'60vh', overflowY:'auto' }}>
         {/* Grabber */}
         <div style={{ display:'flex', justifyContent:'center', padding:'10px 0 4px' }}>
           <div style={{ width:48, height:6, background:'var(--color-surface-container-highest)', borderRadius:3 }} />

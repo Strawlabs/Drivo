@@ -8,6 +8,7 @@ import { fetchPreferredRidersForDriver, approvePreferredRider, declinePreferredR
 import { hasQualifyingTier, checkAndUpdateSubscriptionStatus } from '@/lib/subscriptions'
 import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
 import { fetchAvailableDrivers } from '@/lib/drivers'
+import RealMap from '@/components/RealMap'
 
 // ── Shared ─────────────────────────────────────────────────────
 function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
@@ -181,10 +182,9 @@ function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle,
               <span style={{ width: 8, height: 8, background: 'var(--color-primary-container)', borderRadius: '50%', display: 'inline-block', animation: 'mapPulse 2s infinite' }} />
             </span>
           </div>
-          <div style={{ height: 160, position: 'relative', background: 'linear-gradient(135deg, #e8ecef 0%, #d4dce8 100%)' }}>
-            {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(100,116,139,0.2)' }} />)}
-            {[15, 30, 50, 65, 80].map(p => <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(100,116,139,0.2)' }} />)}
-            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 40, height: 40, background: 'var(--color-primary)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'carPulse 2s infinite' }}>
+          <div style={{ height: 160, position: 'relative' }}>
+            <RealMap center={[12.9611, 77.6387]} zoom={12} interactive={false} />
+            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 40, height: 40, background: 'var(--color-primary)', border: '2px solid white', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'carPulse 2s infinite', boxShadow: '0 2px 10px rgba(0,0,0,0.35)' }}>
               <BoltIcon size={18} />
             </div>
           </div>
