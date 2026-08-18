@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchPreferredDriversForRider } from '@/lib/preferredDrivers'
 import { fetchFamilyMembers, fetchUpcomingScheduledRides, scheduleRide, cancelScheduledRide } from '@/lib/family'
-import { KNOWN_LOCATIONS } from '@/lib/locations'
+import LocationSearchInput from '@/components/LocationSearchInput'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const DAY_NAMES = ['Mo','Tu','We','Th','Fr','Sa','Su']
@@ -286,32 +286,24 @@ export default function ScheduledRidesPage() {
           </div>
         )}
 
-        {/* Pickup — a picker over known locations, same as Book Ride,
-            instead of free text (no geocoding integration exists to
-            validate an arbitrary typed address). */}
-        <div style={{ position: 'relative', marginBottom: 12 }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--color-primary)" style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}><circle cx="12" cy="12" r="5"/></svg>
-          <select value={pickup} onChange={e => setPickup(e.target.value)}
-            style={{ width: '100%', height: 52, paddingLeft: 44, paddingRight: 16, background: '#F8F9FA', border: 'none', borderRadius: 12, fontSize: 15, color: pickup ? 'var(--color-on-surface)' : 'var(--color-secondary)', outline: 'none', fontFamily: 'var(--font-sans)', boxSizing: 'border-box', transition: 'box-shadow 0.2s', appearance: 'none' }}
-            onFocus={e => e.target.style.boxShadow = '0 0 0 2px rgba(0,109,55,0.2)'}
-            onBlur={e => e.target.style.boxShadow = 'none'}
-          >
-            <option value="" disabled>Pickup location</option>
-            {KNOWN_LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
-          </select>
+        {/* Pickup/destination — free-text search (src/lib/geocoding.js via
+            Nominatim), same as Book Ride, instead of a fixed 9-place list. */}
+        <div style={{ marginBottom: 12 }}>
+          <LocationSearchInput
+            value={pickup}
+            onChange={setPickup}
+            onSelect={result => setPickup(result.address)}
+            placeholder="Pickup location"
+          />
         </div>
 
-        {/* Destination */}
-        <div style={{ position: 'relative', marginBottom: 12 }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ba1a1a" strokeWidth="2" style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5" fill="#ba1a1a" stroke="none"/></svg>
-          <select value={destination} onChange={e => setDestination(e.target.value)}
-            style={{ width: '100%', height: 52, paddingLeft: 44, paddingRight: 16, background: '#F8F9FA', border: 'none', borderRadius: 12, fontSize: 15, color: destination ? 'var(--color-on-surface)' : 'var(--color-secondary)', outline: 'none', fontFamily: 'var(--font-sans)', boxSizing: 'border-box', transition: 'box-shadow 0.2s', appearance: 'none' }}
-            onFocus={e => e.target.style.boxShadow = '0 0 0 2px rgba(0,109,55,0.2)'}
-            onBlur={e => e.target.style.boxShadow = 'none'}
-          >
-            <option value="" disabled>Where to?</option>
-            {KNOWN_LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
-          </select>
+        <div style={{ marginBottom: 12 }}>
+          <LocationSearchInput
+            value={destination}
+            onChange={setDestination}
+            onSelect={result => setDestination(result.address)}
+            placeholder="Where to?"
+          />
         </div>
 
         {/* Date + Time row */}

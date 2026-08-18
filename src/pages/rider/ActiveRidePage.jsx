@@ -6,9 +6,10 @@ import { fetchAvailableDrivers } from '@/lib/drivers'
 import { notifyDriverProfile } from '@/lib/notifications'
 import { triggerSos, createSharedTripLink } from '@/lib/safety'
 import { distanceKmBetween } from '@/lib/fare'
-import { LOCATION_COORDS } from '@/lib/locations'
 import { fetchDrivingRoute, pointAlongRoute } from '@/lib/routing'
 import RealMap from '@/components/RealMap'
+
+const FALLBACK_COORDS = { lat: 12.9716, lng: 77.5946 } // central Bangalore, only used if a ride somehow arrives with no coordinates at all
 
 export default function ActiveRidePage() {
   const navigate = useNavigate()
@@ -17,14 +18,17 @@ export default function ActiveRidePage() {
 
   const rideId      = location.state?.rideId      ?? null
   const driver      = location.state?.driver      ?? { name: 'Ramesh K.', rating: 4.9, avatar: 'RK', type: 'EV Sedan' }
-  const pickup      = location.state?.pickup      ?? 'Koramangala 5th Block'
-  const destination = location.state?.destination ?? 'MG Road Metro Station'
-  const initialFare = location.state?.fare        ?? 284
+  const pickup      = location.state?.pickup      ?? 'Pickup location'
+  const destination = location.state?.destination ?? 'Destination'
+  const pickupCoords = location.state?.pickupCoords?.lat != null ? location.state.pickupCoords : FALLBACK_COORDS
+  const destinationCoords = location.state?.destinationCoords?.lat != null ? location.state.destinationCoords : FALLBACK_COORDS
+  const initialFare = location.state?.fare        ?? 100
 
   // Real trip distance (same haversine + route-factor calc that priced the
-  // fare at booking) — falls back to computing it directly if this page
-  // was reached without the value already in nav state.
-  const totalDistanceKm = location.state?.distanceKm ?? distanceKmBetween(pickup, destination) ?? 8
+  // fare at booking) — falls back to computing it directly from the real
+  // coordinates if this page was reached without the value already in nav
+  // state.
+  const totalDistanceKm = location.state?.distanceKm ?? distanceKmBetween(pickupCoords, destinationCoords) ?? 8
   const initialEtaMin = location.state?.etaMin ?? 15
 
   const [rideStatus, setRideStatus] = useState(location.state?.rideStatus ?? 'requested')
@@ -58,25 +62,22 @@ export default function ActiveRidePage() {
   const fareRef = useRef(fare)
   fareRef.current = fare
 
-  // Real driving route between the two real coordinates already resolved
-  // for these named locations (src/lib/locations.js) — fetched once per
-  // ride via OSRM's free public routing server. Falls back to a straight
-  // line between the same two real points if OSRM is unreachable (see
-  // src/lib/routing.js), so the map never breaks, only degrades.
+  // Real driving route between this ride's actual pickup/destination
+  // coordinates (from geolocation + free-text search at booking) — fetched
+  // once per ride via OSRM's free public routing server. Falls back to a
+  // straight line between the same two real points if OSRM is unreachable
+  // (see src/lib/routing.js), so the map never breaks, only degrades.
   const [routeCoords, setRouteCoords] = useState([])
   const [routeDistanceKm, setRouteDistanceKm] = useState(null)
   useEffect(() => {
-    const from = LOCATION_COORDS[pickup]
-    const to = LOCATION_COORDS[destination]
-    if (!from || !to) return
     let cancelled = false
-    fetchDrivingRoute(from, to).then(route => {
+    fetchDrivingRoute(pickupCoords, destinationCoords).then(route => {
       if (cancelled) return
       setRouteCoords(route.coordinates)
       setRouteDistanceKm(route.isRealRoute ? route.distanceKm : null)
     })
     return () => { cancelled = true }
-  }, [pickup, destination])
+  }, [pickupCoords.lat, pickupCoords.lng, destinationCoords.lat, destinationCoords.lng])
 
   // Re-sync local state when navigated to a different ride (e.g. requesting
   // an alternate driver reuses this same route, so mount-only useState
@@ -207,7 +208,11 @@ export default function ActiveRidePage() {
         driver_id: altDriver.id ?? null,
         vehicle_id: altDriver.vehicleId ?? null,
         pickup_address: pickup,
+        pickup_latitude: pickupCoords.lat,
+        pickup_longitude: pickupCoords.lng,
         destination_address: destination,
+        destination_latitude: destinationCoords.lat,
+        destination_longitude: destinationCoords.lng,
         estimated_fare: initialFare,
         status: 'requested',
       }).select().single()
@@ -223,7 +228,7 @@ export default function ActiveRidePage() {
       }
 
       navigate('/rider/active-ride', {
-        state: { rideId: data.id, driver: altDriver, fare: initialFare, pickup, destination, rideStatus: 'requested' },
+        state: { rideId: data.id, driver: altDriver, fare: initialFare, pickup, pickupCoords, destination, destinationCoords, rideStatus: 'requested' },
         replace: true,
       })
     } catch (err) {
@@ -353,16 +358,13 @@ export default function ActiveRidePage() {
           progress advances. Replaces the earlier stylized SVG placeholder. */}
       <div style={{ position: 'fixed', inset: 0, top: headerHeight }}>
         <RealMap
-          center={LOCATION_COORDS[pickup] ? [LOCATION_COORDS[pickup].lat, LOCATION_COORDS[pickup].lng] : [12.9716, 77.5946]}
+          center={[pickupCoords.lat, pickupCoords.lng]}
           zoom={13}
-          bounds={LOCATION_COORDS[pickup] && LOCATION_COORDS[destination] ? [
-            [LOCATION_COORDS[pickup].lat, LOCATION_COORDS[pickup].lng],
-            [LOCATION_COORDS[destination].lat, LOCATION_COORDS[destination].lng],
-          ] : null}
+          bounds={[[pickupCoords.lat, pickupCoords.lng], [destinationCoords.lat, destinationCoords.lng]]}
           route={routeCoords}
           markers={[
-            LOCATION_COORDS[pickup] && { id: 'pickup', type: 'dot', color: 'var(--color-primary)', position: [LOCATION_COORDS[pickup].lat, LOCATION_COORDS[pickup].lng] },
-            LOCATION_COORDS[destination] && { id: 'destination', type: 'pin', color: 'var(--color-on-surface)', position: [LOCATION_COORDS[destination].lat, LOCATION_COORDS[destination].lng] },
+            { id: 'pickup', type: 'dot', color: 'var(--color-primary)', position: [pickupCoords.lat, pickupCoords.lng] },
+            { id: 'destination', type: 'pin', color: 'var(--color-on-surface)', position: [destinationCoords.lat, destinationCoords.lng] },
             carPos && { id: 'car', type: 'car', position: carPos },
           ].filter(Boolean)}
         />

@@ -1,5 +1,4 @@
 import { haversineKm } from '@/lib/goHome'
-import { LOCATION_COORDS } from '@/lib/locations'
 
 // City-street distance runs longer than straight-line distance, and average
 // speed drops with traffic — both scale with a flat multiplier/divisor
@@ -11,15 +10,16 @@ const BASE_FARE = 40
 const PER_KM_RATE = { luxe: 13, space: 18 }
 const MIN_FARE = { luxe: 80, space: 110 }
 
-export function distanceKmBetween(pickup, destination) {
-  const from = LOCATION_COORDS[pickup]
-  const to = LOCATION_COORDS[destination]
+// Takes real {lat, lng} coordinates directly — pickup/destination are now
+// free-text places resolved via geocoding.js, not a fixed named list, so
+// this no longer looks anything up itself.
+export function distanceKmBetween(from, to) {
   if (!from || !to) return null
   return haversineKm(from.lat, from.lng, to.lat, to.lng) * ROUTE_FACTOR
 }
 
-export function estimateFare(pickup, destination, vehicleId) {
-  const distanceKm = distanceKmBetween(pickup, destination)
+export function estimateFare(pickupCoords, destinationCoords, vehicleId) {
+  const distanceKm = distanceKmBetween(pickupCoords, destinationCoords)
   if (distanceKm == null) return { fare: MIN_FARE[vehicleId], distanceKm: 0, etaMin: 3 }
 
   const rawFare = BASE_FARE + distanceKm * PER_KM_RATE[vehicleId]
