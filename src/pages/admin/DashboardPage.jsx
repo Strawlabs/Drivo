@@ -8,6 +8,7 @@ import {
   assignCampaignToDriver, completeAssignment,
 } from '@/lib/ads'
 import { fetchPlatformData, summarizeReports, REPORT_PERIODS } from '@/lib/reports'
+import { fetchFlaggedPayments, resolveFlaggedPayment } from '@/lib/payments'
 
 function Avatar({ name = '?', size = 40 }) {
   return (
@@ -334,6 +335,7 @@ const INCIDENT_STATUS_COLOR = {
 function SafetyAdminPanel() {
   const [incidents, setIncidents] = useState([])
   const [sosEvents, setSosEvents] = useState([])
+  const [flaggedPayments, setFlaggedPayments] = useState([])
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState(null)
   const [notesDraft, setNotesDraft] = useState({})
@@ -341,12 +343,14 @@ function SafetyAdminPanel() {
 
   async function load() {
     setLoading(true)
-    const [{ data: inc }, { data: sos }] = await Promise.all([
+    const [{ data: inc }, { data: sos }, flagged] = await Promise.all([
       supabase.from('incident_reports').select('*, users:reported_by(name, phone), rides(pickup_address, destination_address)').order('created_at', { ascending: false }),
       supabase.from('sos_events').select('*, rides(pickup_address, destination_address), users:triggered_by(name, phone)').order('created_at', { ascending: false }),
+      fetchFlaggedPayments(),
     ])
     setIncidents(inc ?? [])
     setSosEvents(sos ?? [])
+    setFlaggedPayments(flagged)
     setLoading(false)
   }
 
@@ -371,6 +375,18 @@ function SafetyAdminPanel() {
     setSavingId(null)
   }
 
+  async function resolvePayment(id, resolution) {
+    setSavingId(id)
+    try {
+      await resolveFlaggedPayment(id, resolution)
+      await load()
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setSavingId(null)
+    }
+  }
+
   if (loading) return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
 
   const openCount = incidents.filter(i => i.status === 'open').length
@@ -378,20 +394,24 @@ function SafetyAdminPanel() {
 
   return (
     <>
-      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 28 }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 28 }}>
         {[
           { label: 'Open Incidents', value: openCount, icon: 'report' },
           { label: 'Active SOS Events', value: activeSosCount, icon: 'emergency_home' },
+          { label: 'Flagged Payments', value: flaggedPayments.length, icon: 'flag' },
           { label: 'Total Reports', value: incidents.length, icon: 'assignment' },
-        ].map(card => (
+        ].map(card => {
+          const alert = (card.label === 'Active SOS Events' && activeSosCount > 0) || (card.label === 'Flagged Payments' && flaggedPayments.length > 0)
+          return (
           <div key={card.label} style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, padding: 24, boxShadow: '0 4px 20px rgba(26,43,60,0.05)' }}>
-            <div style={{ padding: 10, background: card.label === 'Active SOS Events' && activeSosCount > 0 ? 'rgba(186,26,26,0.12)' : '#d2e4fb', borderRadius: 12, display: 'inline-flex', marginBottom: 12 }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 22, color: card.label === 'Active SOS Events' && activeSosCount > 0 ? '#ba1a1a' : '#4f6073' }}>{card.icon}</span>
+            <div style={{ padding: 10, background: alert ? 'rgba(186,26,26,0.12)' : '#d2e4fb', borderRadius: 12, display: 'inline-flex', marginBottom: 12 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 22, color: alert ? '#ba1a1a' : '#4f6073' }}>{card.icon}</span>
             </div>
             <p style={{ fontSize: 13, color: '#4f6073', marginBottom: 4 }}>{card.label}</p>
             <h3 style={{ fontSize: 28, fontWeight: 600, color: '#0b1c30', margin: 0 }}>{card.value}</h3>
           </div>
-        ))}
+          )
+        })}
       </section>
 
       <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden', marginBottom: 28 }}>
@@ -415,6 +435,45 @@ function SafetyAdminPanel() {
                   Mark Resolved
                 </button>
               )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden', marginBottom: 28 }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>Flagged Payments</h2>
+          <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3 }}>A UPI reference was reused across two payments — decide which (if either) actually paid.</p>
+        </div>
+        <div style={{ padding: '8px 24px 20px' }}>
+          {flaggedPayments.length === 0 && <p style={{ fontSize: 13, color: '#4f6073', padding: '12px 0' }}>No flagged payments.</p>}
+          {flaggedPayments.map(p => (
+            <div key={p.id} style={{ padding: '14px 0', borderTop: '1px solid #e5eeff' }}>
+              <div className="flex justify-between items-start" style={{ marginBottom: 6 }}>
+                <div>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>
+                    {p.users?.name ?? 'Unknown rider'} → {p.driver_profiles?.users?.name ?? 'Unknown driver'} · ₹{Number(p.amount).toFixed(2)}
+                  </p>
+                  <p style={{ fontSize: 12, color: '#4f6073' }}>
+                    {p.rides?.pickup_address ?? '—'} → {p.rides?.destination_address ?? '—'} · {new Date(p.created_at).toLocaleString('en-IN')}
+                  </p>
+                  <p style={{ fontSize: 12, color: '#ba1a1a', marginTop: 4 }}>
+                    Reference "{p.upi_reference}" also used by {p.conflictingPayment?.users?.name ?? 'another payment'}
+                    {p.conflictingPayment ? ` (currently ${p.conflictingPayment.status})` : ''}.
+                  </p>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#ba1a1a', background: 'rgba(186,26,26,0.08)', padding: '3px 10px', borderRadius: 6, whiteSpace: 'nowrap' }}>flagged</span>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => resolvePayment(p.id, 'failed')} disabled={savingId === p.id}
+                  style={{ padding: '6px 14px', border: '1px solid #ba1a1a', borderRadius: 8, background: 'none', color: '#ba1a1a', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  Reject (Mark Failed)
+                </button>
+                <button onClick={() => resolvePayment(p.id, 'completed')} disabled={savingId === p.id}
+                  style={{ padding: '6px 14px', border: 'none', borderRadius: 8, background: '#006d37', color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  Approve (Mark Completed)
+                </button>
+              </div>
             </div>
           ))}
         </div>

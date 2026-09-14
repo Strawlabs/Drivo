@@ -32,37 +32,66 @@ export async function initiateUpiPayment({ rideId, riderId, driverId, amount }) 
   Confirms a rider-reported UPI reference number. Since there's no real
   payment gateway callback for MVP, this is the only fraud check available:
   if the same reference has already been used on a different payment, flag
-  it for manual review instead of marking the ride paid.
+  it for manual review instead of marking the ride paid. That check, and
+  the actual status write, both happen inside confirm_upi_payment
+  (schema.sql) now, not here — a plain client update had no WITH CHECK on
+  its RLS policy, so a rider could set status/upi_reference/paid_at to
+  anything on their own payment, bypassing this fraud check completely
+  (confirmed exploitable in production before this fix). The RPC also
+  only transitions a genuinely 'pending' payment, closing the same
+  client-side SELECT-then-UPDATE race the subscription fix addressed.
 */
 export async function confirmUpiPayment({ paymentId, upiReference }) {
   const ref = upiReference.trim()
   if (!ref) throw new Error('Enter the UPI transaction reference to confirm payment.')
 
-  const { data: existing } = await supabase
-    .from('payments')
-    .select('id')
-    .eq('upi_reference', ref)
-    .neq('id', paymentId)
-    .maybeSingle()
-
-  const flagged = Boolean(existing)
-  const { data, error } = await supabase
-    .from('payments')
-    .update({
-      status: flagged ? 'flagged' : 'completed',
-      upi_reference: ref,
-      paid_at: flagged ? null : new Date().toISOString(),
-    })
-    .eq('id', paymentId)
-    .select()
-    .single()
+  const { data, error } = await supabase.rpc('confirm_upi_payment', {
+    p_payment_id: paymentId, p_upi_reference: ref,
+  })
   if (error) throw error
   return data
 }
 
 export async function failUpiPayment(paymentId) {
-  const { error } = await supabase.from('payments').update({ status: 'failed' }).eq('id', paymentId)
+  const { error } = await supabase.rpc('fail_upi_payment', { p_payment_id: paymentId })
   if (error) throw error
+}
+
+/*
+  A flagged payment used to just vanish — nothing surfaced it to an
+  admin, and nothing could ever move it out of 'flagged' even if
+  someone noticed (confirm_upi_payment only transitions a genuinely
+  'pending' payment). Pulls in the OTHER payment that holds the same
+  upi_reference too, since that's the actual fact an admin needs to
+  adjudicate which side (if either) is telling the truth.
+*/
+export async function fetchFlaggedPayments() {
+  const { data: flagged, error } = await supabase
+    .from('payments')
+    .select('*, users:rider_id(name, phone), driver_profiles(users(name)), rides(pickup_address, destination_address)')
+    .eq('status', 'flagged')
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  if ((flagged ?? []).length === 0) return []
+
+  const refs = [...new Set(flagged.map(p => p.upi_reference).filter(Boolean))]
+  const { data: conflicts } = await supabase
+    .from('payments')
+    .select('id, upi_reference, status, users:rider_id(name)')
+    .in('upi_reference', refs)
+
+  return flagged.map(p => ({
+    ...p,
+    conflictingPayment: (conflicts ?? []).find(c => c.upi_reference === p.upi_reference && c.id !== p.id) ?? null,
+  }))
+}
+
+export async function resolveFlaggedPayment(paymentId, resolution) {
+  const { data, error } = await supabase.rpc('admin_resolve_flagged_payment', {
+    p_payment_id: paymentId, p_resolution: resolution,
+  })
+  if (error) throw error
+  return data
 }
 
 export async function payCash({ rideId, riderId, driverId, amount }) {
