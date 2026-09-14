@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchAvailableDrivers } from '@/lib/drivers'
+import { useCurrentPosition } from '@/hooks/useCurrentPosition'
 import { dispatchDueScheduledRides, sendDueReminders } from '@/lib/family'
 import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
 import { KNOWN_LOCATIONS, LOCATION_COORDS } from '@/lib/locations'
@@ -76,10 +77,11 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
   const [search, setSearch] = useState('')
   const [drivers, setDrivers] = useState([])
   const [co2SavedKg, setCo2SavedKg] = useState(0)
+  const myLocation = useCurrentPosition()
 
   useEffect(() => {
-    fetchAvailableDrivers().then(setDrivers).catch(() => setDrivers([]))
-  }, [])
+    fetchAvailableDrivers({ origin: myLocation }).then(setDrivers).catch(() => setDrivers([]))
+  }, [myLocation])
 
   useEffect(() => {
     if (!userId) return
@@ -224,7 +226,9 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>Available now</p>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>
+                      {driver.distanceKm != null ? `${driver.distanceKm} km away` : 'Available now'}
+                    </p>
                     <p style={{ fontSize: 10, color: 'var(--color-secondary)', marginTop: 2 }}>{driver.type}</p>
                   </div>
                 </div>
@@ -461,23 +465,34 @@ function DriversTab({ onBookDriver }) {
   const [view, setView] = useState('list')
   const [activeFilter, setActiveFilter] = useState(null)
   const [drivers, setDrivers] = useState([])
+  const myLocation = useCurrentPosition()
 
   useEffect(() => {
-    fetchAvailableDrivers().then(setDrivers).catch(() => setDrivers([]))
-  }, [])
+    fetchAvailableDrivers({ origin: myLocation }).then(setDrivers).catch(() => setDrivers([]))
+  }, [myLocation])
 
   // The chips visually toggled but never actually narrowed the list —
   // every driver rendered regardless of which one was selected. No 'All'
   // chip exists, so a chip toggles off (back to showing everyone) if
   // tapped again rather than always forcing exactly one filter active.
-  // 'Distance' has nothing to filter/sort by — no GPS/geocoding data
-  // exists anywhere in this app — so it stays a visual selection only,
-  // same honest-no-op treatment as elsewhere in this codebase.
-  const filteredDrivers = drivers.filter(d => {
-    if (activeFilter === 'EV Auto') return d.vehicleType === 'ev_auto'
-    if (activeFilter === 'EV Car') return d.vehicleType === 'ev_car'
-    return true
-  })
+  // 'Distance' now has real data to work with (driver_profiles gained
+  // live GPS this session) — fetchAvailableDrivers already returns the
+  // list nearest-first (after priority placement), so toggling this
+  // chip re-sorts strictly by distance, ignoring priority, for a rider
+  // who explicitly wants "closest first" over "priority first."
+  const filteredDrivers = drivers
+    .filter(d => {
+      if (activeFilter === 'EV Auto') return d.vehicleType === 'ev_auto'
+      if (activeFilter === 'EV Car') return d.vehicleType === 'ev_car'
+      return true
+    })
+    .sort((a, b) => {
+      if (activeFilter !== 'Distance') return 0   // Array.sort is stable — preserves fetchAvailableDrivers' own order
+      if (a.distanceKm == null && b.distanceKm == null) return 0
+      if (a.distanceKm == null) return 1
+      if (b.distanceKm == null) return -1
+      return a.distanceKm - b.distanceKm
+    })
 
   return (
     <div style={{ paddingBottom: 120 }}>
@@ -582,7 +597,9 @@ function DriversTab({ onBookDriver }) {
                 </div>
                 <div className="flex items-center gap-1.5 mt-2">
                   <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-primary)', flexShrink: 0, display: 'inline-block' }} />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)' }}>Available Now</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-primary)' }}>
+                    {driver.distanceKm != null ? `${driver.distanceKm} km away` : 'Available Now'}
+                  </span>
                 </div>
               </div>
             </div>

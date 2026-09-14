@@ -1,11 +1,28 @@
 import { supabase } from '@/lib/supabase'
+import { haversineKm } from '@/lib/goHome'
+
+// Generous enough to cover one metro city end-to-end (Bangalore's own
+// diagonal is ~35km), tight enough to guarantee a driver from a
+// different city never shows up as "nearby." Only applied when both the
+// rider's and the driver's real coordinates are known — same "GPS
+// optional, don't filter on what you don't have" tradeoff used
+// everywhere else in this app (see matchGoHomeRide's driverLoc-optional
+// gates) rather than hiding drivers just because location permission
+// was denied.
+const NEARBY_MAX_KM = 30
 
 /*
   Live pool of drivers a rider can actually book.
   rides.driver_id references driver_profiles(id) — NOT the auth/users id —
   so every caller must use the `id` this returns as the driver identifier.
+
+  `origin` ({lat,lng}, optional) is whoever's asking "who's near me" —
+  a rider on the Home/Discovery tabs, or another driver on the Discovery
+  tab. Without it, every online driver is returned unfiltered/unsorted
+  by distance (the previous behavior) since there's nothing to measure
+  from.
 */
-export async function fetchAvailableDrivers({ excludeDriverId } = {}) {
+export async function fetchAvailableDrivers({ excludeDriverId, origin = null } = {}) {
   let query = supabase
     .from('driver_profiles')
     .select('id, rating, current_latitude, current_longitude, users(name), vehicles(id, make, model, vehicle_type)')
@@ -20,9 +37,12 @@ export async function fetchAvailableDrivers({ excludeDriverId } = {}) {
   const driverIds = (data ?? []).map(d => d.id)
   const priorityIds = await fetchElitePriorityDriverIds(driverIds)
 
-  const drivers = (data ?? []).map(d => {
+  let drivers = (data ?? []).map(d => {
     const vehicle = d.vehicles?.[0] ?? null
     const name = d.users?.name?.trim() || 'Driver'
+    const lat = d.current_latitude != null ? Number(d.current_latitude) : null
+    const lng = d.current_longitude != null ? Number(d.current_longitude) : null
+    const distanceKm = (origin && lat != null && lng != null) ? haversineKm(origin.lat, origin.lng, lat, lng) : null
     return {
       id: d.id,
       name,
@@ -32,13 +52,25 @@ export async function fetchAvailableDrivers({ excludeDriverId } = {}) {
       type: vehicle ? [vehicle.make, vehicle.model].filter(Boolean).join(' ') : 'EV',
       vehicleType: vehicle?.vehicle_type ?? null,
       isPriority: priorityIds.has(d.id),
-      lat: d.current_latitude != null ? Number(d.current_latitude) : null,
-      lng: d.current_longitude != null ? Number(d.current_longitude) : null,
+      lat, lng,
+      distanceKm: distanceKm != null ? Math.round(distanceKm * 10) / 10 : null,
     }
   })
 
-  // Elite subscribers surface first — the "priority visibility" benefit.
-  return drivers.sort((a, b) => (b.isPriority === a.isPriority) ? 0 : b.isPriority ? 1 : -1)
+  if (origin) {
+    drivers = drivers.filter(d => d.distanceKm == null || d.distanceKm <= NEARBY_MAX_KM)
+  }
+
+  // Elite subscribers surface first (the "priority visibility" benefit),
+  // then nearest-first within each group — unknown distance sorts last
+  // rather than being guessed at.
+  return drivers.sort((a, b) => {
+    if (a.isPriority !== b.isPriority) return a.isPriority ? -1 : 1
+    if (a.distanceKm == null && b.distanceKm == null) return 0
+    if (a.distanceKm == null) return 1
+    if (b.distanceKm == null) return -1
+    return a.distanceKm - b.distanceKm
+  })
 }
 
 /*

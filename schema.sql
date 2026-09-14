@@ -1443,7 +1443,15 @@ begin
 
     -- Otherwise, the nearest eligible online driver (unknown location
     -- sorts last rather than being excluded, same fallback pattern used
-    -- everywhere else real GPS is optional in this app).
+    -- everywhere else real GPS is optional in this app) — but capped to
+    -- 30km when both positions are actually known (same radius the
+    -- client uses in src/lib/drivers.js's NEARBY_MAX_KM). Without this
+    -- cap, a quiet night with nobody online nearby would still hand the
+    -- ride to whoever was furthest away, anywhere, rather than expiring
+    -- the search after 5 minutes like it's supposed to when nobody's
+    -- really around — the exact bug that would silently cross-match a
+    -- rider in one city with a driver in another the moment this app
+    -- serves more than one.
     if candidate_id is null then
       select dp.id into candidate_id
       from public.driver_profiles dp
@@ -1456,6 +1464,10 @@ begin
             and (r.requested_vehicle_type is null or v.vehicle_type = r.requested_vehicle_type)
         )
         and public.driver_compatible_with_go_home(dp.id, r.destination_latitude, r.destination_longitude, r.pickup_latitude, r.pickup_longitude)
+        and (
+          dp.current_latitude is null or r.pickup_latitude is null
+          or public.haversine_km(dp.current_latitude, dp.current_longitude, r.pickup_latitude, r.pickup_longitude) <= 30
+        )
       order by
         case when dp.current_latitude is not null and r.pickup_latitude is not null
           then public.haversine_km(dp.current_latitude, dp.current_longitude, r.pickup_latitude, r.pickup_longitude)

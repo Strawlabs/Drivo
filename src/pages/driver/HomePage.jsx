@@ -212,18 +212,18 @@ function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle,
 // Ride action, which made no sense for a driver account. Kept the
 // same visual shape (riders benefit from seeing this list exists) but
 // now shows real online drivers, purely informational.
-function DiscoveryTab({ driverProfileId }) {
+function DiscoveryTab({ driverProfileId, liveLocation }) {
   const [filter, setFilter] = useState('all')
   const [drivers, setDrivers] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!driverProfileId) return
-    fetchAvailableDrivers({ excludeDriverId: driverProfileId })
+    fetchAvailableDrivers({ excludeDriverId: driverProfileId, origin: liveLocation })
       .then(setDrivers)
       .catch(() => setDrivers([]))
       .finally(() => setLoading(false))
-  }, [driverProfileId])
+  }, [driverProfileId, liveLocation])
 
   const filtered = filter === 'all' ? drivers : drivers.filter(d => d.vehicleType === filter)
 
@@ -265,7 +265,7 @@ function DiscoveryTab({ driverProfileId }) {
                 </div>
                 <div className="flex items-center gap-1.5 mt-1">
                   <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-primary)', display: 'inline-block', flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>Online now</span>
+                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{driver.distanceKm != null ? `${driver.distanceKm} km away` : 'Online now'}</span>
                 </div>
               </div>
             </div>
@@ -1072,7 +1072,7 @@ export default function DriverHomePage() {
       {/* Tab Content */}
       <div style={{ paddingBottom: 80 }}>
         {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => navigate('/driver/go-home')} onOpenPreferredRiders={() => setShowPreferredRiders(true)} onOpenEarnings={() => setActiveNav('rides')} onOpenSubscription={() => navigate('/driver/subscription')} liveLocation={liveLocation} />}
-        {activeNav === 'discovery' && <DiscoveryTab driverProfileId={driverProfileId} />}
+        {activeNav === 'discovery' && <DiscoveryTab driverProfileId={driverProfileId} liveLocation={liveLocation} />}
         {activeNav === 'rides'     && <RidesTab driverProfileId={driverProfileId} />}
         {activeNav === 'family'    && <FamilyTab onOpenPreferredRiders={() => setShowPreferredRiders(true)} />}
       </div>
