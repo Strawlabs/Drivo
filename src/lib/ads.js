@@ -122,11 +122,21 @@ export async function fetchCampaignAssignments(campaignId) {
   fabricating a fake automatic calculation.
 */
 export async function completeAssignment(id, earningsCredited) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('driver_campaign_assignments')
     .update({ status: 'completed', earnings_credited: earningsCredited })
     .eq('id', id)
+    .select('driver_id, ad_campaigns(title)')
+    .single()
   if (error) throw error
+
+  // Unlike assignCampaignToDriver (the offer), completing one never told
+  // the driver — they'd only find out by manually revisiting the Ads tab.
+  await notifyDriverProfile(data.driver_id, {
+    category: 'advertising',
+    title: 'Ad campaign earnings credited',
+    body: `₹${Number(earningsCredited).toFixed(2)} was credited for "${data.ad_campaigns?.title ?? 'your campaign'}".`,
+  }).catch(() => {})
 }
 
 // ── Driver: viewing and responding to offers ─────────────────────
