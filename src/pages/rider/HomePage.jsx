@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchAvailableDrivers } from '@/lib/drivers'
-import { fetchPreferredDriversForRider, removePreferredDriver, fetchSubscriptionTier, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
 import { dispatchDueScheduledRides, sendDueReminders } from '@/lib/family'
 import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
 import { KNOWN_LOCATIONS, LOCATION_COORDS } from '@/lib/locations'
@@ -73,7 +72,7 @@ function LeafIcon({ size = 32, color = 'var(--color-primary)' }) {
 }
 
 // ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDrivers, userId }) {
+function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDrivers, onRequestRide, userId }) {
   const [search, setSearch] = useState('')
   const [drivers, setDrivers] = useState([])
   const [co2SavedKg, setCo2SavedKg] = useState(0)
@@ -116,6 +115,14 @@ function HomeTab({ firstName, greeting, onBookDriver, onSchedule, onBrowseDriver
             placeholder="Where would you like to go?"
             value={search}
             onChange={e => setSearch(e.target.value)}
+            onKeyDown={e => {
+              // Enter here means "just get me a ride" — no driver chosen,
+              // so it goes to BookRidePage in auto-match mode and the
+              // dispatch engine finds a real nearby candidate. Picking a
+              // specific driver (below, or from Preferred Drivers) is
+              // still a separate, unchanged path.
+              if (e.key === 'Enter' && search.trim()) onRequestRide(search.trim())
+            }}
             className="w-full"
             style={{
               height: 56, paddingLeft: 48, paddingRight: 48,
@@ -506,11 +513,13 @@ function DriversTab({ onBookDriver }) {
         </div>
       </div>
 
-      {/* Map view — real OpenStreetMap tiles over Bangalore. Drivers still
-          don't submit any real GPS anywhere in this app, so their pins are
-          a deterministic scatter around a real central point rather than a
-          fabricated precise location — same honesty tradeoff as before,
-          just plotted on a real map now instead of a stylized placeholder. */}
+      {/* Map view — real OpenStreetMap tiles over Bangalore. Drivers who've
+          gone online since the location-broadcast feature shipped (see
+          useDriverLocation) get their real reported position; older/never-
+          online-since drivers fall back to a deterministic scatter around
+          a real central point rather than a fabricated precise location —
+          same honesty tradeoff as before, just for a shrinking set of
+          drivers instead of all of them. */}
       {view === 'map' && (
         <div className="px-5 mb-3">
           <div className="relative overflow-hidden" style={{ height: 280, borderRadius: 16, boxShadow: '0 4px 16px rgba(26,43,60,0.12)' }}>
@@ -526,13 +535,17 @@ function DriversTab({ onBookDriver }) {
                 markers={filteredDrivers.map((driver, i) => ({
                   id: driver.id,
                   type: 'driver',
-                  position: [12.9611 + (((i * 37) % 70) - 35) * 0.0015, 77.6387 + (((i * 53) % 60) - 30) * 0.0015],
+                  position: (driver.lat != null && driver.lng != null)
+                    ? [driver.lat, driver.lng]
+                    : [12.9611 + (((i * 37) % 70) - 35) * 0.0015, 77.6387 + (((i * 53) % 60) - 30) * 0.0015],
                   onClick: () => navigate(`/rider/driver/${driver.id}`),
                 }))}
               />
             )}
           </div>
-          <p style={{ fontSize: 11, color: 'var(--color-secondary)', marginTop: 8, textAlign: 'center' }}>Illustrative positions — live GPS tracking isn't wired up yet.</p>
+          <p style={{ fontSize: 11, color: 'var(--color-secondary)', marginTop: 8, textAlign: 'center' }}>
+            {filteredDrivers.some(d => d.lat != null) ? 'Live positions where a driver has reported one; others are approximate.' : 'Illustrative positions — no driver here has reported a live location yet.'}
+          </p>
         </div>
       )}
 
@@ -750,124 +763,14 @@ function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDriver
   )
 }
 
-// ── Preferred Drivers ────────────────────────────────────────────
-function PreferredDriversModal({ userId, onClose, onBookDriver, onUpgrade }) {
-  const [loading, setLoading] = useState(true)
-  const [drivers, setDrivers] = useState([])
-  const [tier, setTier] = useState('none')
-  const [removingId, setRemovingId] = useState(null)
-
-  useEffect(() => {
-    async function load() {
-      const [list, t] = await Promise.all([
-        fetchPreferredDriversForRider(userId),
-        fetchSubscriptionTier(userId),
-      ])
-      setDrivers(list)
-      setTier(t)
-      setLoading(false)
-    }
-    load()
-  }, [userId])
-
-  const isEligible = ELIGIBLE_TIERS.includes(tier)
-
-  async function handleRemove(preferredId) {
-    setRemovingId(preferredId)
-    try {
-      await removePreferredDriver(preferredId)
-      setDrivers(prev => prev.filter(d => d.preferredId !== preferredId))
-    } finally {
-      setRemovingId(null)
-    }
-  }
-
-  return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(11,28,48,0.6)', backdropFilter: 'blur(4px)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201, background: 'var(--color-surface)', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 20px 40px', boxShadow: '0 -10px 40px rgba(26,43,60,0.2)', maxHeight: '85vh', overflowY: 'auto' }}>
-        <div style={{ width: 40, height: 4, background: 'var(--color-outline-variant)', borderRadius: 2, margin: '0 auto 20px' }} />
-        <div className="flex items-center justify-between mb-4">
-          <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)' }}>🚗 Preferred Drivers</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-secondary)' }}>✕</button>
-        </div>
-
-        {!isEligible && (
-          <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 16 }}>
-            <p style={{ fontSize: 13, color: '#B45309', marginBottom: 8 }}>
-              {drivers.length > 0
-                ? "Your Care Plan / Family Plan has expired — upgrade to request these drivers directly again."
-                : "Saving and requesting preferred drivers is a Care Plan / Family Plan benefit."}
-            </p>
-            <button onClick={onUpgrade} style={{ background: 'none', border: 'none', color: '#B45309', fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
-              Upgrade Plan →
-            </button>
-          </div>
-        )}
-
-        {loading && <p style={{ fontSize: 14, color: 'var(--color-secondary)', textAlign: 'center', padding: '20px 0' }}>Loading…</p>}
-
-        {!loading && drivers.length === 0 && (
-          <p style={{ fontSize: 14, color: 'var(--color-secondary)', textAlign: 'center', padding: '20px 0' }}>
-            No preferred drivers yet — save one from the ride-completion screen after your next ride.
-          </p>
-        )}
-
-        <div className="flex flex-col gap-3">
-          {drivers.map(d => (
-            <div key={d.preferredId} style={{ background: 'var(--color-surface-container-low)', borderRadius: 14, padding: 14 }}>
-              <div className="flex items-center gap-3 mb-2">
-                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
-                  {d.avatar}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-on-surface)' }}>{d.name}</p>
-                  <div className="flex items-center gap-1.5">
-                    <span style={{ fontSize: 12, color: '#F59E0B' }}>★</span>
-                    <span style={{ fontSize: 12, color: 'var(--color-on-surface)' }}>{d.rating}</span>
-                    <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {d.type}</span>
-                  </div>
-                </div>
-                <button onClick={() => handleRemove(d.preferredId)} disabled={removingId === d.preferredId}
-                  style={{ background: 'none', border: 'none', color: 'var(--color-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                  {removingId === d.preferredId ? '…' : 'Remove'}
-                </button>
-              </div>
-
-              <p style={{ fontSize: 12, color: 'var(--color-secondary)', marginBottom: 8 }}>
-                Last ride: {d.lastRideAt ? new Date(d.lastRideAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No completed rides yet'}
-              </p>
-
-              {d.status === 'pending' && (
-                <p style={{ fontSize: 12, color: 'var(--color-secondary)', fontStyle: 'italic' }}>Waiting for driver approval</p>
-              )}
-              {d.status === 'blocked_by_driver' && (
-                <p style={{ fontSize: 12, color: 'var(--color-error)' }}>This driver isn't accepting your requests right now</p>
-              )}
-              {d.status === 'active' && (
-                <button
-                  onClick={() => onBookDriver(d)}
-                  disabled={!d.isOnline || !isEligible}
-                  style={{ width: '100%', height: 38, background: (d.isOnline && isEligible) ? 'var(--color-primary)' : 'var(--color-surface-container)', color: (d.isOnline && isEligible) ? 'white' : 'var(--color-secondary)', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: (d.isOnline && isEligible) ? 'pointer' : 'default' }}>
-                  {!isEligible ? 'Upgrade to request' : d.isOnline ? 'Request Ride' : 'Offline right now'}
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </>
-  )
-}
-
 // ── Main Page ───────────────────────────────────────────────────
 export default function RiderHomePage() {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const [activeNav, setActiveNav] = useState('home')
+  const location = useLocation()
+  const [activeNav, setActiveNav] = useState(location.state?.tab ?? 'home')
   const [firstName, setFirstName] = useState('Rider')
   const [unreadCount, setUnreadCount] = useState(0)
-  const [showPreferredDrivers, setShowPreferredDrivers] = useState(false)
 
   useEffect(() => {
     if (!user) return
@@ -901,6 +804,13 @@ export default function RiderHomePage() {
     const unsubscribe = subscribeToNotifications(user.id, () => setUnreadCount(c => c + 1))
     return unsubscribe
   }, [user])
+
+  // Sub-pages (Preferred Drivers / Scheduled / Family) navigate back here
+  // with { tab } in location state; RiderHomePage doesn't remount on those,
+  // so sync the active tab whenever that state changes.
+  useEffect(() => {
+    if (location.state?.tab) setActiveNav(location.state.tab)
+  }, [location.state])
 
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening'
@@ -938,20 +848,11 @@ export default function RiderHomePage() {
           stretched edge-to-edge instead of reading as a phone-shaped app,
           making already tightly-spaced cards look sparse and crowded. */}
       <main className="flex-1 overflow-y-auto pb-28" style={{ maxWidth: activeNav === 'home' ? 1100 : 480, width: '100%', margin: '0 auto' }}>
-        {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} onBrowseDrivers={() => setActiveNav('drivers')} userId={user?.id} />}
+        {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} onBrowseDrivers={() => setActiveNav('drivers')} onRequestRide={destination => navigate('/rider/book-ride', { state: { destination } })} userId={user?.id} />}
         {activeNav === 'trips'   && <TripsTab userId={user?.id} />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
-        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} userId={user?.id} onSignOut={handleSignOut} onOpenPreferredDrivers={() => setShowPreferredDrivers(true)} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} onOpenSubscription={() => navigate('/rider/subscription')} />}
+        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} userId={user?.id} onSignOut={handleSignOut} onOpenPreferredDrivers={() => navigate('/rider/preferred-drivers')} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} onOpenSubscription={() => navigate('/rider/subscription')} />}
       </main>
-
-      {showPreferredDrivers && user && (
-        <PreferredDriversModal
-          userId={user.id}
-          onClose={() => setShowPreferredDrivers(false)}
-          onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })}
-          onUpgrade={() => { setShowPreferredDrivers(false); navigate('/rider/subscription') }}
-        />
-      )}
 
       {/* Bottom Nav */}
       <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-4 pt-2" style={{ background: 'var(--color-surface)', boxShadow: '0px -4px 20px rgba(26,43,60,0.05)', borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>

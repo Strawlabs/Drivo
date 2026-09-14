@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchDriverEarnings, summarizeForPeriod, bucketTrend, buildEarningsReportCsv, PERIOD_DAYS } from '@/lib/earnings'
-import { HOME_ZONES, validateGoHomeInput, activateGoHome, deactivateGoHome, fetchActiveGoHomeSession, matchGoHomeRide, toLocalDatetimeInputValue } from '@/lib/goHome'
+import { deactivateGoHome, fetchActiveGoHomeSession, matchGoHomeRide } from '@/lib/goHome'
 import { fetchPreferredRidersForDriver, approvePreferredRider, declinePreferredRider, blockPreferredRider } from '@/lib/preferredDrivers'
 import { hasQualifyingTier, checkAndUpdateSubscriptionStatus } from '@/lib/subscriptions'
 import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
 import { fetchAvailableDrivers } from '@/lib/drivers'
+import { useDriverLocation } from '@/hooks/useDriverLocation'
 import RealMap from '@/components/RealMap'
 
 // ── Shared ─────────────────────────────────────────────────────
@@ -96,7 +97,7 @@ function BoltIcon({ size = 18, color = 'white' }) {
 }
 
 // ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome, onOpenPreferredRiders, onOpenEarnings, onOpenSubscription }) {
+function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome, onOpenPreferredRiders, onOpenEarnings, onOpenSubscription, liveLocation }) {
   return (
     <main className="mx-auto px-5 pb-32" style={{ maxWidth: 1100, paddingTop: 24 }}>
       {/* Desktop-only 2-column split (Quick Actions + Map move into a side
@@ -183,10 +184,20 @@ function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle,
             </span>
           </div>
           <div style={{ height: 160, position: 'relative' }}>
-            <RealMap center={[12.9611, 77.6387]} zoom={12} interactive={false} />
-            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 40, height: 40, background: 'var(--color-primary)', border: '2px solid white', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'carPulse 2s infinite', boxShadow: '0 2px 10px rgba(0,0,0,0.35)' }}>
-              <BoltIcon size={18} />
-            </div>
+            <RealMap
+              center={liveLocation ? [liveLocation.lat, liveLocation.lng] : [12.9611, 77.6387]}
+              zoom={liveLocation ? 14 : 12}
+              interactive={false}
+              markers={liveLocation ? [{ id: 'me', type: 'car', color: 'var(--color-primary)', position: [liveLocation.lat, liveLocation.lng] }] : []}
+            />
+            {/* Placeholder pulse only while a real GPS fix hasn't come in yet
+                (or the driver is offline) — once liveLocation exists, the
+                real marker above replaces it. */}
+            {!liveLocation && (
+              <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 40, height: 40, background: 'var(--color-primary)', border: '2px solid white', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'carPulse 2s infinite', boxShadow: '0 2px 10px rgba(0,0,0,0.35)' }}>
+                <BoltIcon size={18} />
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -537,121 +548,6 @@ function PreferredRidersModal({ driverProfileId, onClose, onCountChange, onOpenS
   )
 }
 
-// ── Go Home Mode ─────────────────────────────────────────────────
-function GoHomeModal({ session, driverProfileId, onClose, onActivated, onDeactivated }) {
-  const [zoneName, setZoneName] = useState(session?.preferred_route?.zone_name ?? HOME_ZONES[0].name)
-  const [radiusKm, setRadiusKm] = useState(session?.home_zone_radius_km ?? 3)
-  const [endTime, setEndTime] = useState(() => {
-    if (session?.end_time) return toLocalDatetimeInputValue(new Date(session.end_time))
-    return toLocalDatetimeInputValue(new Date(Date.now() + 2 * 60 * 60 * 1000))
-  })
-  const [note, setNote] = useState(session?.preferred_route?.note ?? '')
-  const [error, setError] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const [now, setNow] = useState(Date.now())
-
-  useEffect(() => {
-    if (!session) return
-    const t = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(t)
-  }, [session])
-
-  async function handleActivate() {
-    setError(null)
-    const validationError = validateGoHomeInput({ zoneName, radiusKm: Number(radiusKm), endTime })
-    if (validationError) { setError(validationError); return }
-    setBusy(true)
-    try {
-      const newSession = await activateGoHome({ driverId: driverProfileId, zoneName, radiusKm: Number(radiusKm), endTime, note })
-      onActivated(newSession)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleDeactivate() {
-    setBusy(true)
-    try {
-      await deactivateGoHome(session.id, 'cancelled')
-      onDeactivated()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const msLeft = session ? new Date(session.end_time).getTime() - now : 0
-  const minsLeft = Math.max(0, Math.floor(msLeft / 60000))
-  const hoursLeft = Math.floor(minsLeft / 60)
-
-  return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(11,28,48,0.6)', backdropFilter: 'blur(4px)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201, background: 'var(--color-surface)', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 20px 40px', boxShadow: '0 -10px 40px rgba(26,43,60,0.2)', maxHeight: '85vh', overflowY: 'auto' }}>
-        <div style={{ width: 40, height: 4, background: 'var(--color-outline-variant)', borderRadius: 2, margin: '0 auto 20px' }} />
-        <div className="flex items-center justify-between mb-4">
-          <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)' }}>📍 Go Home Mode</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-secondary)' }}>✕</button>
-        </div>
-
-        {session ? (
-          <div className="flex flex-col gap-4">
-            <div style={{ background: 'rgba(0,109,55,0.08)', border: '1px solid rgba(0,109,55,0.25)', borderRadius: 14, padding: 16 }}>
-              <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-primary)', marginBottom: 4 }}>ACTIVE — heading toward {session.preferred_route?.zone_name}</p>
-              <p style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>Radius: {session.home_zone_radius_km} km · Ends in {hoursLeft > 0 ? `${hoursLeft}h ` : ''}{minsLeft % 60}m</p>
-              {session.preferred_route?.note && <p style={{ fontSize: 12, color: 'var(--color-secondary)', marginTop: 6 }}>Note: {session.preferred_route.note}</p>}
-            </div>
-            <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>
-              You'll get priority alerts for ride requests heading toward this area. Requests that aren't on your way home won't be shown while this is active.
-            </p>
-            <button onClick={handleDeactivate} disabled={busy}
-              style={{ width: '100%', height: 48, background: 'var(--color-error-container)', color: 'var(--color-error)', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
-              {busy ? 'Ending…' : 'End Go Home Mode'}
-            </button>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {error && (
-              <p style={{ fontSize: 13, color: 'var(--color-error)', background: 'var(--color-error-container)', borderRadius: 10, padding: '8px 12px' }}>{error}</p>
-            )}
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>Home area</label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
-                {HOME_ZONES.map(z => (
-                  <button key={z.name} onClick={() => setZoneName(z.name)}
-                    style={{ height: 40, borderRadius: 10, border: `2px solid ${zoneName === z.name ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: zoneName === z.name ? 'rgba(0,109,55,0.08)' : 'none', color: 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                    {z.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>Radius (km)</label>
-              <input type="number" min={1} max={15} value={radiusKm} onChange={e => setRadiusKm(e.target.value)}
-                style={{ width: '100%', height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14, marginTop: 6 }} />
-            </div>
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>End time</label>
-              <input type="datetime-local" value={endTime} onChange={e => setEndTime(e.target.value)}
-                style={{ width: '100%', height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14, marginTop: 6 }} />
-            </div>
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>Preferred route note (optional)</label>
-              <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. via Outer Ring Road"
-                style={{ width: '100%', height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14, marginTop: 6 }} />
-            </div>
-            <button onClick={handleActivate} disabled={busy}
-              style={{ width: '100%', height: 48, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
-              {busy ? 'Activating…' : 'Activate Go Home Mode'}
-            </button>
-          </div>
-        )}
-      </div>
-    </>
-  )
-}
-
 // ── Incoming Ride Request Modal ─────────────────────────────────
 function RideRequestModal({ ride, onAccept, onReject, goHomeMatch }) {
   const [countdown, setCountdown] = useState(30)
@@ -676,7 +572,9 @@ function RideRequestModal({ ride, onAccept, onReject, goHomeMatch }) {
           <div style={{ background: 'rgba(0,109,55,0.1)', border: '1px solid rgba(0,109,55,0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 18 }}>📍</span>
             <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary)' }}>
-              Priority Match — {goHomeMatch.distanceKm} km from home · ₹{ride.estimated_fare} potential earnings
+              Priority Match — ends {goHomeMatch.dropGapKm} km from home
+              {goHomeMatch.progressKm != null ? `, ${goHomeMatch.progressKm} km closer` : ''}
+              {goHomeMatch.etaMin != null ? ` · ~${goHomeMatch.etaMin} min` : ''} · ₹{ride.estimated_fare}
             </p>
           </div>
         )}
@@ -727,7 +625,10 @@ export default function DriverHomePage() {
   const [activeNav, setActiveNav]   = useState('home')
   const [vehicle, setVehicle]       = useState(null)
   const [driverProfileId, setDriverProfileId] = useState(null)
-  const [incomingRide, setIncomingRide] = useState(null)
+  // [{ ride, match }] — in Go Home Mode kept sorted by match.score desc so
+  // rideQueue[0] is always the most "on the way home" request; match is
+  // null when Go Home Mode is off.
+  const [rideQueue, setRideQueue] = useState([])
   const [activeRide, setActiveRide] = useState(null)
   const [todayEarnings, setTodayEarnings] = useState(0)
   const [todayTripsCount, setTodayTripsCount] = useState(0)
@@ -735,14 +636,21 @@ export default function DriverHomePage() {
   const [preferredRidersCount, setPreferredRidersCount] = useState(0)
   const [subscription, setSubscription] = useState(null)
   const [goHomeSession, setGoHomeSession] = useState(null)
-  const [showGoHomeModal, setShowGoHomeModal] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
-  const [goHomeMatch, setGoHomeMatch] = useState(null)
   const [showPreferredRiders, setShowPreferredRiders] = useState(false)
 
   const [displayName, setDisplayName] = useState('Driver')
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening'
+
+  const currentRequest = rideQueue[0] ?? null
+
+  // Real, continuously-updated position while online — broadcasts to
+  // driver_profiles (so riders/dispatch can see it) and feeds Go Home
+  // Mode's matching (pickup-detour + bearing gates). Optional wherever
+  // it's used — matching still works without a fix. Declared before the
+  // effects below since they depend on it.
+  const { location: liveLocation } = useDriverLocation({ driverProfileId, active: isOnline })
 
   useEffect(() => {
     if (!user) return
@@ -766,29 +674,58 @@ export default function DriverHomePage() {
     load()
   }, [user])
 
-  // Listen for new ride requests assigned to this driver
+  // Listen for ride requests assigned to this driver — either a direct
+  // booking (INSERT, rider picked this driver by name) or the dispatch
+  // engine offering an auto-match request (UPDATE, driver_id just became
+  // this driver's id while status is still 'requested'). Both funnel into
+  // the same queue/Go-Home-filtering logic.
   useEffect(() => {
     if (!driverProfileId || !isOnline) return
+
+    async function handleIncomingRide(ride) {
+      if (ride.status !== 'requested') return
+
+      if (goHomeSession) {
+        // While Go Home Mode is active, only surface rides that actually
+        // head home, and keep the queue ordered best-first so the driver
+        // always sees the most "on the way" request at the top. (For an
+        // auto-match ride, dispatch_pending_rides already filtered this
+        // server-side — this is a defensive re-check, e.g. Go Home Mode
+        // having just turned on after the offer was made.)
+        const match = matchGoHomeRide(ride, goHomeSession, liveLocation)
+        if (!match.compatible) {
+          await releaseOrExpire(ride)
+          return
+        }
+        setRideQueue(q => (
+          q.some(item => item.ride.id === ride.id)
+            ? q
+            : [...q, { ride, match }].sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0))
+        ))
+      } else {
+        setRideQueue(q => (
+          q.some(item => item.ride.id === ride.id) ? q : [...q, { ride, match: null }]
+        ))
+      }
+    }
+
+    // Catch up on anything already offered before this page was open to
+    // hear it — e.g. the dispatch engine assigned this driver a ride while
+    // their app was closed/backgrounded. Without this, an offer made just
+    // before the driver opens the app is invisible until it times out and
+    // moves on to the next candidate (confirmed happening in testing).
+    supabase.from('rides').select('*').eq('driver_id', driverProfileId).eq('status', 'requested')
+      .then(({ data }) => (data ?? []).forEach(handleIncomingRide))
+
     const channel = supabase
       .channel('driver-rides-' + driverProfileId)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverProfileId}` }, async payload => {
-        if (payload.new.status !== 'requested') return
-        if (goHomeSession) {
-          const match = matchGoHomeRide(payload.new, goHomeSession)
-          if (!match.compatible) {
-            // Only route-compatible rides are suggested while Go Home Mode is active
-            await supabase.from('rides').update({ status: 'expired' }).eq('id', payload.new.id)
-            return
-          }
-          setGoHomeMatch(match)
-        } else {
-          setGoHomeMatch(null)
-        }
-        setIncomingRide(payload.new)
-      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverProfileId}` },
+        payload => handleIncomingRide(payload.new))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverProfileId}` },
+        payload => handleIncomingRide(payload.new))
       .subscribe()
     return () => supabase.removeChannel(channel)
-  }, [driverProfileId, isOnline, goHomeSession])
+  }, [driverProfileId, isOnline, goHomeSession, liveLocation])
 
   // Today's earnings — completed payments only, refreshed live as riders pay
   useEffect(() => {
@@ -883,8 +820,25 @@ export default function DriverHomePage() {
     return () => clearTimeout(t)
   }, [goHomeSession])
 
+  // Auto-match rides are never killed by a single driver's reject/timeout/
+  // being-busy — they go back to dispatch_pending_rides' pool (via a
+  // backdated offered_at, which the next cron tick treats as a stale
+  // offer and reassigns) so the next candidate gets a shot. Only a direct
+  // booking (a rider picked this driver by name) actually expires, since
+  // there's no pool to fall back into.
+  async function releaseOrExpire(ride) {
+    if (ride.dispatch_mode === 'auto') {
+      await supabase.from('rides').update({ offered_at: new Date(Date.now() - 31000).toISOString() })
+        .eq('id', ride.id).eq('driver_id', driverProfileId).eq('status', 'requested')
+    } else {
+      await supabase.from('rides').update({ status: 'expired' }).eq('id', ride.id)
+    }
+  }
+
   async function handleAcceptRide() {
-    if (!incomingRide || !driverProfileId) return
+    const request = rideQueue[0]
+    if (!request || !driverProfileId) return
+    const ride = request.ride
     const { data: existing } = await supabase
       .from('rides')
       .select('id')
@@ -892,20 +846,36 @@ export default function DriverHomePage() {
       .in('status', ['accepted', 'active'])
       .maybeSingle()
     if (existing) {
-      await supabase.from('rides').update({ status: 'expired' }).eq('id', incomingRide.id)
-      setIncomingRide(null)
+      await releaseOrExpire(ride)
+      setRideQueue(q => q.slice(1))
       return
     }
-    await supabase.from('rides').update({ status: 'accepted' }).eq('id', incomingRide.id)
-    setActiveRide(incomingRide)
-    setIncomingRide(null)
+
+    // Guarded update — only succeeds if this ride is still actually
+    // offered to me. dispatch_pending_rides' 30s timeout sweep could have
+    // reassigned it to someone else a moment before this tap landed.
+    const { data: accepted, error } = await supabase
+      .from('rides')
+      .update({ status: 'accepted' })
+      .eq('id', ride.id)
+      .eq('driver_id', driverProfileId)
+      .eq('status', 'requested')
+      .select()
+      .maybeSingle()
+
+    if (error || !accepted) {
+      alert('Sorry — this ride was just given to another driver.')
+      setRideQueue(q => q.slice(1))
+      return
+    }
+    setActiveRide(accepted)
+    setRideQueue([])   // drop any other queued candidates — they stay 'requested' for normal dispatch
   }
 
   async function handleRejectRide() {
-    if (incomingRide) {
-      await supabase.from('rides').update({ status: 'expired' }).eq('id', incomingRide.id)
-    }
-    setIncomingRide(null)
+    const request = rideQueue[0]
+    if (request) await releaseOrExpire(request.ride)
+    setRideQueue(q => q.slice(1))   // fall through to the next-best queued request
   }
 
   async function handleStartRide() {
@@ -1002,24 +972,14 @@ export default function DriverHomePage() {
         </div>
       )}
 
-      {/* Incoming ride request */}
-      {incomingRide && (
+      {/* Incoming ride request — top of the queue (best Go Home match first) */}
+      {currentRequest && (
         <RideRequestModal
-          ride={incomingRide}
+          key={currentRequest.ride.id}
+          ride={currentRequest.ride}
           onAccept={handleAcceptRide}
           onReject={handleRejectRide}
-          goHomeMatch={goHomeMatch}
-        />
-      )}
-
-      {/* Go Home Mode */}
-      {showGoHomeModal && (
-        <GoHomeModal
-          session={goHomeSession}
-          driverProfileId={driverProfileId}
-          onClose={() => setShowGoHomeModal(false)}
-          onActivated={session => { setGoHomeSession(session); setShowGoHomeModal(false) }}
-          onDeactivated={() => { setGoHomeSession(null); setShowGoHomeModal(false) }}
+          goHomeMatch={currentRequest.match}
         />
       )}
 
@@ -1052,7 +1012,7 @@ export default function DriverHomePage() {
           </div>
         </div>
         <div className="flex flex-col gap-1" style={{ flex: 1 }}>
-          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode', onClick: () => { setShowGoHomeModal(true); setDrawerOpen(false) } }, { icon: '📊', label: 'Analytics' }, { icon: '⭐', label: 'Subscription', onClick: () => { setDrawerOpen(false); navigate('/driver/subscription') } }, { icon: '📣', label: 'Ads', onClick: () => { setDrawerOpen(false); navigate('/driver/ads') } }, { icon: '⚙️', label: 'Settings' }].map(({ icon, label, active, onClick }) => (
+          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode', onClick: () => { setDrawerOpen(false); navigate('/driver/go-home') } }, { icon: '📊', label: 'Analytics' }, { icon: '⭐', label: 'Subscription', onClick: () => { setDrawerOpen(false); navigate('/driver/subscription') } }, { icon: '📣', label: 'Ads', onClick: () => { setDrawerOpen(false); navigate('/driver/ads') } }, { icon: '⚙️', label: 'Settings' }].map(({ icon, label, active, onClick }) => (
             <button key={label} onClick={onClick} className="flex items-center gap-4 text-left" style={{ padding: '10px 12px', borderRadius: 8, border: 'none', background: active ? 'var(--color-secondary-container)' : 'transparent', color: active ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)', fontSize: 16, fontWeight: active ? 700 : 400, cursor: onClick ? 'pointer' : 'default' }}>
               <span style={{ fontSize: 18 }}>{icon}</span>{label}
               {label === 'Go Home Mode' && goHomeSession && (
@@ -1087,7 +1047,7 @@ export default function DriverHomePage() {
 
       {/* Tab Content */}
       <div style={{ paddingBottom: 80 }}>
-        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => setShowGoHomeModal(true)} onOpenPreferredRiders={() => setShowPreferredRiders(true)} onOpenEarnings={() => setActiveNav('rides')} onOpenSubscription={() => navigate('/driver/subscription')} />}
+        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => navigate('/driver/go-home')} onOpenPreferredRiders={() => setShowPreferredRiders(true)} onOpenEarnings={() => setActiveNav('rides')} onOpenSubscription={() => navigate('/driver/subscription')} liveLocation={liveLocation} />}
         {activeNav === 'discovery' && <DiscoveryTab driverProfileId={driverProfileId} />}
         {activeNav === 'rides'     && <RidesTab driverProfileId={driverProfileId} />}
         {activeNav === 'family'    && <FamilyTab onOpenPreferredRiders={() => setShowPreferredRiders(true)} />}

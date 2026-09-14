@@ -7,6 +7,7 @@ import {
   fetchEmergencyContacts, addEmergencyContact, deleteEmergencyContact,
   fetchActiveFamilyRide, fetchUpcomingScheduledRides, cancelScheduledRide,
 } from '@/lib/family'
+import RiderBottomNav from '@/components/RiderBottomNav'
 
 function Card({ children, style }) {
   return (
@@ -133,7 +134,7 @@ export default function FamilyPage() {
         </div>
       </header>
 
-      <main style={{ maxWidth: 480, width: '100%', margin: '0 auto', padding: '20px 20px 60px' }}>
+      <main style={{ maxWidth: 480, width: '100%', margin: '0 auto', padding: '20px 20px 110px' }}>
 
         {/* Add Family Member */}
         <button onClick={() => { setShowAddMember(s => !s); setAddMemberError('') }}
@@ -291,6 +292,8 @@ export default function FamilyPage() {
           </div>
         </section>
       </main>
+
+      <RiderBottomNav active="profile" />
     </div>
   )
 }

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
-import { fetchAvailableDrivers } from '@/lib/drivers'
+import { fetchAvailableDrivers, fetchDriverBasicInfo } from '@/lib/drivers'
 import { notifyDriverProfile } from '@/lib/notifications'
 import { triggerSos, createSharedTripLink } from '@/lib/safety'
 import { distanceKmBetween } from '@/lib/fare'
@@ -17,7 +17,6 @@ export default function ActiveRidePage() {
   const { user } = useAuth()
 
   const rideId      = location.state?.rideId      ?? null
-  const driver      = location.state?.driver      ?? { name: 'Ramesh K.', rating: 4.9, avatar: 'RK', type: 'EV Sedan' }
   const pickup      = location.state?.pickup      ?? 'Pickup location'
   const destination = location.state?.destination ?? 'Destination'
   const pickupCoords = location.state?.pickupCoords?.lat != null ? location.state.pickupCoords : FALLBACK_COORDS
@@ -31,6 +30,13 @@ export default function ActiveRidePage() {
   const totalDistanceKm = location.state?.distanceKm ?? distanceKmBetween(pickupCoords, destinationCoords) ?? 8
   const initialEtaMin = location.state?.etaMin ?? 15
 
+  // null means "no driver chosen yet" — a genuine, honest state for an
+  // auto-match request (see BookRidePage) between booking and the
+  // dispatch engine actually finding someone, not a fabricated stand-in.
+  const [driver, setDriver] = useState(location.state?.driver ?? null)
+  const driverRef = useRef(driver)
+  driverRef.current = driver
+
   const [rideStatus, setRideStatus] = useState(location.state?.rideStatus ?? 'requested')
   const [fare, setFare]         = useState(initialFare)
   const [eta, setEta]           = useState(initialEtaMin)
@@ -38,6 +44,9 @@ export default function ActiveRidePage() {
   const [cancelling, setCancelling] = useState(false)
   const [alternates, setAlternates] = useState([])
   const [driverPhone, setDriverPhone] = useState(null)
+  const [vehicleInfo, setVehicleInfo] = useState(null)   // { label, plate } from the driver's active vehicle
+  const [driverLiveLoc, setDriverLiveLoc] = useState(null)   // real GPS fix from the driver's phone, once one exists
+  const [rideStartedAt, setRideStartedAt] = useState(location.state?.startedAt ?? null)
   const [sosPanel, setSosPanel] = useState(null) // null | 'confirm' | { contacts }
   const [triggeringSos, setTriggeringSos] = useState(false)
   const [sharePanel, setSharePanel] = useState(null) // null | { url }
@@ -115,24 +124,59 @@ export default function ActiveRidePage() {
   const effectiveDistanceKm = routeDistanceKm ?? totalDistanceKm
   const distanceTraveledKm = Math.round(effectiveDistanceKm * (progress / 100) * 10) / 10
   const distanceRemainingKm = Math.round((effectiveDistanceKm - effectiveDistanceKm * (progress / 100)) * 10) / 10
-  const carPos = pointAlongRoute(routeCoords, progress / 100)
+  // Prefer the driver's real reported position; fall back to the simulated
+  // progress-along-route dot for drivers who haven't reported a GPS fix yet
+  // (e.g. the first few seconds after accepting, or an older client).
+  const carPos = driverLiveLoc ?? pointAlongRoute(routeCoords, progress / 100)
   const traveledRoute = carPos ? [...routeCoords.slice(0, Math.max(1, Math.round((progress / 100) * (routeCoords.length - 1)))), carPos] : []
+
+  // Catch up on the ride's real current state once on mount — covers a
+  // reload mid-ride (nav state would otherwise show stale info) and, for
+  // an auto-match request, the case where the dispatch engine already
+  // assigned a driver before this page's realtime subscription below
+  // started listening.
+  useEffect(() => {
+    if (!rideId) return
+    supabase.from('rides').select('status, driver_id, started_at').eq('id', rideId).maybeSingle()
+      .then(async ({ data }) => {
+        if (!data) return
+        if (data.started_at) setRideStartedAt(data.started_at)
+        if (data.status) setRideStatus(data.status)
+        if (data.driver_id && data.driver_id !== driverRef.current?.id) {
+          const info = await fetchDriverBasicInfo(data.driver_id)
+          if (info) setDriver(info)
+        }
+      })
+  }, [rideId])
 
   // Supabase realtime — listen for ride status changes
   useEffect(() => {
     if (!rideId) return
     const channel = supabase
       .channel(`ride-${rideId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides', filter: `id=eq.${rideId}` }, payload => {
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides', filter: `id=eq.${rideId}` }, async payload => {
         const s = payload.new.status
+        const newDriverId = payload.new.driver_id
+
+        // The dispatch engine just assigned (or reassigned) a driver —
+        // fetch who it is so the rest of the page has a real name/rating/
+        // vehicle to show instead of nothing.
+        if (newDriverId && newDriverId !== driverRef.current?.id) {
+          const info = await fetchDriverBasicInfo(newDriverId)
+          if (info) setDriver(info)
+        }
+
         if (s === 'accepted') setRideStatus('accepted')
-        if (s === 'active')   setRideStatus('active')
+        if (s === 'active') {
+          setRideStatus('active')
+          if (payload.new.started_at) setRideStartedAt(payload.new.started_at)
+        }
         if (s === 'expired') {
           setRideStatus('expired')
-          fetchAvailableDrivers({ excludeDriverId: driver.id }).then(setAlternates).catch(() => setAlternates([]))
+          fetchAvailableDrivers({ excludeDriverId: driverRef.current?.id }).then(setAlternates).catch(() => setAlternates([]))
         }
         if (s === 'completed') {
-          navigate('/rider/ride-complete', { state: { rideId, driver, fare: fareRef.current, pickup, destination }, replace: true })
+          navigate('/rider/ride-complete', { state: { rideId, driver: driverRef.current, fare: fareRef.current, pickup, destination }, replace: true })
         }
         if (s === 'cancelled') {
           navigate('/rider/home', { replace: true })
@@ -143,10 +187,51 @@ export default function ActiveRidePage() {
   }, [rideId])
 
   useEffect(() => {
-    if (!driver.id) return
-    supabase.from('driver_profiles').select('users(phone)').eq('id', driver.id).maybeSingle()
-      .then(({ data }) => setDriverPhone(data?.users?.phone ?? null))
-  }, [driver.id])
+    if (!driver?.id) return
+    supabase
+      .from('driver_profiles')
+      .select('users(phone), current_latitude, current_longitude, vehicles(make, model, registration_number, vehicle_type, is_active)')
+      .eq('id', driver.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        setDriverPhone(data?.users?.phone ?? null)
+        if (data?.current_latitude != null && data?.current_longitude != null) {
+          setDriverLiveLoc({ lat: Number(data.current_latitude), lng: Number(data.current_longitude) })
+        }
+        const v = (data?.vehicles ?? []).find(x => x.is_active) ?? data?.vehicles?.[0]
+        if (v) {
+          const label = [v.make, v.model].filter(Boolean).join(' ') || (v.vehicle_type === 'ev_auto' ? 'EV Auto' : 'EV Car')
+          setVehicleInfo({ label, plate: v.registration_number ?? null })
+        }
+      })
+  }, [driver?.id])
+
+  // Real, live driver position — replaces the simulated progress-based dot
+  // on the map whenever the driver's phone has actually reported a fix
+  // (see useDriverLocation on the driver side). Falls back to the
+  // simulated position below when no real fix exists yet.
+  useEffect(() => {
+    if (!driver?.id) return
+    const channel = supabase
+      .channel(`driver-location-${driver.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'driver_profiles', filter: `id=eq.${driver.id}` }, payload => {
+        const { current_latitude, current_longitude } = payload.new
+        if (current_latitude != null && current_longitude != null) {
+          setDriverLiveLoc({ lat: Number(current_latitude), lng: Number(current_longitude) })
+        }
+      })
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [driver?.id])
+
+  // Real trip start time — set when the driver taps "Start Ride" (rides.started_at).
+  // Falls back to created_at; the Start label is hidden entirely if neither exists,
+  // rather than showing a fabricated "4 minutes ago".
+  useEffect(() => {
+    if (!rideId) return
+    supabase.from('rides').select('started_at, created_at').eq('id', rideId).maybeSingle()
+      .then(({ data }) => { if (data) setRideStartedAt(data.started_at ?? data.created_at ?? null) })
+  }, [rideId])
 
   async function handleTriggerSos() {
     if (triggeringSos || !rideId || !user) return
@@ -236,7 +321,7 @@ export default function ActiveRidePage() {
     }
   }
 
-  const startTime = new Date(Date.now() - 4 * 60000)
+  const startTime = rideStartedAt ? new Date(rideStartedAt) : null
   const fmt = d => d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
 
   if (rideStatus === 'expired') {
@@ -246,9 +331,13 @@ export default function ActiveRidePage() {
           <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'var(--color-error-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
             <span className="material-symbols-outlined" style={{ fontSize: 28, color: 'var(--color-error)' }}>person_off</span>
           </div>
-          <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 6 }}>Driver unavailable</h2>
+          <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 6 }}>
+            {driver ? 'Driver unavailable' : 'No drivers found nearby'}
+          </h2>
           <p style={{ fontSize: 15, color: 'var(--color-secondary)' }}>
-            {driver.name} couldn't take your ride. Pick another driver below.
+            {driver
+              ? `${driver.name} couldn't take your ride. Pick another driver below.`
+              : "Nobody was available nearby just now. Pick a driver below, or try again shortly."}
           </p>
         </header>
 
@@ -297,12 +386,14 @@ export default function ActiveRidePage() {
           </div>
         </div>
 
-        <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 8, textAlign: 'center' }}>Waiting for driver…</h2>
+        <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 8, textAlign: 'center' }}>
+          {driver ? 'Waiting for driver…' : 'Finding you a driver…'}
+        </h2>
         <p style={{ fontSize: 15, color: 'var(--color-secondary)', textAlign: 'center', marginBottom: 8 }}>
-          {driver.name} is reviewing your request
+          {driver ? `${driver.name} is reviewing your request` : 'Looking for a nearby EV driver to take this ride'}
         </p>
         <p style={{ fontSize: 13, color: 'var(--color-on-surface-variant)', textAlign: 'center', marginBottom: 40 }}>
-          This usually takes under 30 seconds
+          {driver ? 'This usually takes under 30 seconds' : 'This can take a minute or two'}
         </p>
 
         {/* Route summary */}
@@ -479,7 +570,7 @@ export default function ActiveRidePage() {
             <span>{distanceRemainingKm.toFixed(1)} km left</span>
           </div>
           <div className="flex justify-between mt-1" style={{ fontSize:11, color:'var(--color-on-surface-variant)' }}>
-            <span>Start: {fmt(startTime)}</span>
+            <span>{startTime ? `Start: ${fmt(startTime)}` : 'Start: —'}</span>
             <span>ETA: {fmt(new Date(Date.now() + eta * 60000))}</span>
           </div>
         </div>
@@ -489,25 +580,27 @@ export default function ActiveRidePage() {
           <div className="flex items-center gap-3 flex-1">
             <div style={{ position:'relative' }}>
               <div style={{ width:64, height:64, borderRadius:'50%', background:'var(--color-primary)', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontWeight:700, fontSize:22, border:'2px solid var(--color-primary-container)' }}>
-                {driver.avatar}
+                {driver?.avatar ?? '—'}
               </div>
               <div style={{ position:'absolute', bottom:-2, right:-2, width:22, height:22, background:'var(--color-primary)', borderRadius:'50%', border:'2px solid var(--color-surface)', display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <span className="material-symbols-outlined" style={{ fontSize:12, color:'white', fontVariationSettings:"'FILL' 1" }}>star</span>
               </div>
             </div>
             <div>
-              <p style={{ fontSize:18, fontWeight:700, color:'var(--color-on-surface)' }}>{driver.name}</p>
-              <p style={{ fontSize:13, color:'var(--color-on-surface-variant)' }}>{driver.rating} Rating · EV Certified</p>
+              <p style={{ fontSize:18, fontWeight:700, color:'var(--color-on-surface)' }}>{driver?.name ?? 'Your driver'}</p>
+              <p style={{ fontSize:13, color:'var(--color-on-surface-variant)' }}>{driver?.rating ?? '—'} Rating · EV Certified</p>
             </div>
           </div>
           <div className="flex items-center gap-3 flex-1" style={{ background:'var(--color-surface-container-low)', borderRadius:16, padding:'10px 12px' }}>
             <span className="material-symbols-outlined" style={{ fontSize:36, color:'var(--color-primary)' }}>directions_car</span>
             <div>
               <div className="flex items-center gap-2">
-                <p style={{ fontSize:13, fontWeight:600, color:'var(--color-on-surface)' }}>{driver.type ?? 'EV Sedan'}</p>
+                <p style={{ fontSize:13, fontWeight:600, color:'var(--color-on-surface)' }}>{vehicleInfo?.label ?? driver?.type ?? 'EV vehicle'}</p>
                 <span style={{ background:'var(--color-on-surface)', color:'white', fontSize:10, fontWeight:700, padding:'1px 5px', borderRadius:3 }}>EV</span>
               </div>
-              <p style={{ fontSize:11, color:'var(--color-on-surface-variant)', letterSpacing:'0.1em', marginTop:2 }}>KA · 05 EV 7890</p>
+              {vehicleInfo?.plate && (
+                <p style={{ fontSize:11, color:'var(--color-on-surface-variant)', letterSpacing:'0.1em', marginTop:2 }}>{vehicleInfo.plate}</p>
+              )}
             </div>
           </div>
         </div>

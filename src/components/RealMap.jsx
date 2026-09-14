@@ -62,11 +62,19 @@ function ViewSync({ center, zoom, bounds }) {
 }
 
 /*
-  Dark CARTO basemap — free, no API key, no billing account, still backed
-  by OpenStreetMap data. Chosen over the default light OSM tiles because
-  every map surface in this app (SOS button, gradient overlays, route
-  glow) was built for a dark map underneath it; the light default would
-  clash badly with all of that surrounding chrome.
+  CARTO's free anonymous dark_all tiles now render an "API KEY REQUIRED"
+  placeholder instead of the basemap — CARTO started gating cartocdn.com
+  behind a (still-free, but signup-required) account. Rather than add an
+  external account this app doesn't otherwise need, this uses the plain
+  public OpenStreetMap tile server (genuinely keyless, no signup) and
+  fakes the dark look with a CSS filter on just the tile images — markers,
+  routes and UI chrome sit in separate Leaflet panes and are untouched by
+  it, so nothing else has to change.
+
+  Caveat carried over from OSRM/Nominatim elsewhere in this app: the
+  public tile server's usage policy isn't meant for heavy commercial
+  traffic — fine for development and demos, not for production at scale
+  (that would mean self-hosting tiles or paying a provider).
 */
 export default function RealMap({
   center,
@@ -98,10 +106,11 @@ export default function RealMap({
       keyboard={interactive}
     >
       <TileLayer
-        url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        subdomains="abcd"
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        subdomains="abc"
         maxZoom={19}
+        className="drivo-dark-tiles"
       />
       <ViewSync center={center} zoom={zoom} bounds={bounds} />
       {route && route.length > 1 && (

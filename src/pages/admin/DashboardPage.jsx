@@ -23,9 +23,12 @@ function Avatar({ name = '?', size = 40 }) {
 }
 
 function DocsBadge({ status }) {
+  // "submitted" used to read "✓ Verified" here — nobody had, since there
+  // was no way to even view the uploaded files (see DriverDocumentsPanel).
+  // Submitted means uploaded and awaiting review, not verified.
   if (status === 'submitted') return (
-    <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:12, fontWeight:600, color:'#006d37', background:'rgba(46,204,113,0.12)', padding:'3px 10px', borderRadius:6 }}>
-      <span className="material-symbols-outlined" style={{ fontSize:15 }}>check_circle</span> Verified
+    <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:12, fontWeight:600, color:'#b45309', background:'rgba(245,158,11,0.14)', padding:'3px 10px', borderRadius:6 }}>
+      <span className="material-symbols-outlined" style={{ fontSize:15 }}>hourglass_top</span> Docs Submitted
     </span>
   )
   if (status === 'pending') return (
@@ -37,6 +40,74 @@ function DocsBadge({ status }) {
     <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:12, fontWeight:600, color:'#4f6073', background:'#e5eeff', padding:'3px 10px', borderRadius:6 }}>
       {status}
     </span>
+  )
+}
+
+const KYC_DOC_LABELS = { license: "Driver's License", insurance: 'Vehicle Insurance', ev_cert: 'EV Certification' }
+
+/*
+  Actually lets the admin look at what a driver uploaded before approving
+  them — previously "Approve" was a button with no way to ever see the
+  license/insurance/EV-cert files DriverVerificationPage already uploads
+  to the (private) kyc-documents bucket. Signed URLs, 10-minute expiry,
+  fetched fresh every time this opens rather than cached/stored anywhere.
+*/
+function DriverDocumentsPanel({ driver, onClose }) {
+  const [loading, setLoading] = useState(true)
+  const [docs, setDocs] = useState({})
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      setError(null)
+      const { data: files, error: listErr } = await supabase.storage.from('kyc-documents').list(driver.user_id)
+      if (listErr) {
+        if (!cancelled) { setError(listErr.message); setLoading(false) }
+        return
+      }
+      const found = {}
+      for (const f of files ?? []) {
+        const docId = f.name.split('.')[0]
+        const { data: signed } = await supabase.storage.from('kyc-documents')
+          .createSignedUrl(`${driver.user_id}/${f.name}`, 600)
+        if (signed?.signedUrl) found[docId] = signed.signedUrl
+      }
+      if (!cancelled) { setDocs(found); setLoading(false) }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [driver.user_id])
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(11,28,48,0.5)', zIndex: 200 }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: 'white', borderRadius: 16, padding: 24, width: 420, maxWidth: '90vw', zIndex: 201, boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: '#0b1c30', margin: 0 }}>{driver.users?.name ?? 'Driver'}'s documents</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#4f6073', lineHeight: 1 }}>✕</button>
+        </div>
+        <p style={{ fontSize: 12, color: '#4f6073', marginBottom: 16 }}>Links expire in 10 minutes.</p>
+
+        {loading && <p style={{ fontSize: 13, color: '#4f6073' }}>Loading…</p>}
+        {error && <p style={{ fontSize: 13, color: '#ba1a1a' }}>Couldn't load documents: {error}</p>}
+        {!loading && !error && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {Object.entries(KYC_DOC_LABELS).map(([id, label]) => (
+              <div key={id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: '#f8f9ff', borderRadius: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>{label}</span>
+                {docs[id] ? (
+                  <a href={docs[id]} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 700, color: '#006d37', textDecoration: 'underline' }}>View</a>
+                ) : (
+                  <span style={{ fontSize: 12, color: '#ba1a1a' }}>Not uploaded</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -149,6 +220,107 @@ function SubscriptionAdminPanel() {
           </table>
         </div>
       </section>
+    </>
+  )
+}
+
+/*
+  Same fix as SubscriptionAdminPanel's editable plan prices, applied to
+  ride fares — base_fare/per_km_rate/min_fare/route_factor/avg_speed_kmh
+  used to be hardcoded constants in src/lib/fare.js. The PRD leaves the
+  actual fare model undecided; this at least makes changing the numbers
+  a real, admin-controlled action instead of a code deploy.
+*/
+function PricingAdminPanel() {
+  const [tiers, setTiers] = useState([])
+  const [settings, setSettings] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [savingKey, setSavingKey] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    const [{ data: t }, { data: s }] = await Promise.all([
+      supabase.from('fare_tiers').select('*').order('tier'),
+      supabase.from('fare_settings').select('*').eq('id', 1).maybeSingle(),
+    ])
+    setTiers(t ?? [])
+    setSettings(s ?? null)
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function updateTier(tier, field, value) {
+    setSavingKey(tier + field)
+    await supabase.from('fare_tiers').update({ [field]: value, updated_at: new Date().toISOString() }).eq('tier', tier)
+    await load()
+    setSavingKey(null)
+  }
+
+  async function updateSettings(field, value) {
+    setSavingKey('settings' + field)
+    await supabase.from('fare_settings').update({ [field]: value, updated_at: new Date().toISOString() }).eq('id', 1)
+    await load()
+    setSavingKey(null)
+  }
+
+  if (loading) return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
+
+  const numberField = (value, onCommit, key, { prefix = '', width = 80 } = {}) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      {prefix && <span style={{ fontSize: 13, color: '#4f6073' }}>{prefix}</span>}
+      <input type="number" defaultValue={value} disabled={savingKey === key}
+        onBlur={e => { const v = Number(e.target.value); if (v > 0 && v !== Number(value)) onCommit(v) }}
+        style={{ width, height: 32, padding: '0 8px', border: '1px solid #bbcbbb', borderRadius: 6, fontSize: 13 }} />
+    </div>
+  )
+
+  return (
+    <>
+      <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden', marginBottom: 20 }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>Ride Fare Tiers</h2>
+          <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3 }}>Changes apply to every fare estimated from here on — riders currently mid-booking still see the value they already loaded.</p>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#eff4ff' }}>
+                {['Tier', 'Base Fare', 'Per-KM Rate', 'Minimum Fare'].map(h => (
+                  <th key={h} style={{ padding: '12px 24px', textAlign: 'left', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: '#4f6073', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {tiers.map(t => (
+                <tr key={t.tier} style={{ borderTop: '1px solid #e5eeff' }}>
+                  <td style={{ padding: '16px 24px', fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>{t.label}</td>
+                  <td style={{ padding: '16px 24px' }}>{numberField(t.base_fare, v => updateTier(t.tier, 'base_fare', v), t.tier + 'base_fare', { prefix: '₹' })}</td>
+                  <td style={{ padding: '16px 24px' }}>{numberField(t.per_km_rate, v => updateTier(t.tier, 'per_km_rate', v), t.tier + 'per_km_rate', { prefix: '₹/km' })}</td>
+                  <td style={{ padding: '16px 24px' }}>{numberField(t.min_fare, v => updateTier(t.tier, 'min_fare', v), t.tier + 'min_fare', { prefix: '₹' })}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {settings && (
+        <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', padding: '20px 24px' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: '0 0 4px' }}>Route Assumptions</h2>
+          <p style={{ fontSize: 12, color: '#4f6073', marginBottom: 20 }}>Shared across every tier — not a per-vehicle price, but how fare/ETA are estimated before a real route is fetched.</p>
+          <div style={{ display: 'flex', gap: 32 }}>
+            <div>
+              <p style={{ fontSize: 12, color: '#4f6073', marginBottom: 6 }}>Route factor (real route ÷ straight-line distance)</p>
+              {numberField(settings.route_factor, v => updateSettings('route_factor', v), 'settingsroute_factor', { width: 90 })}
+            </div>
+            <div>
+              <p style={{ fontSize: 12, color: '#4f6073', marginBottom: 6 }}>Assumed average speed (km/h)</p>
+              {numberField(settings.avg_speed_kmh, v => updateSettings('avg_speed_kmh', v), 'settingsavg_speed_kmh', { width: 90 })}
+            </div>
+          </div>
+        </section>
+      )}
     </>
   )
 }
@@ -594,6 +766,7 @@ function ReportsAdminPanel() {
 
 const NAV = [
   { icon: 'analytics',  label: 'Analytics', active: true },
+  { icon: 'payments',   label: 'Pricing' },
   { icon: 'loyalty',    label: 'Subscription' },
   { icon: 'shield',     label: 'Safety' },
   { icon: 'ads_click',  label: 'Ads' },
@@ -606,6 +779,7 @@ export default function AdminDashboardPage() {
   const [drivers, setDrivers] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [viewingDriver, setViewingDriver] = useState(null)
   const [adminName, setAdminName] = useState('Admin')
   const [activeNav, setActiveNav] = useState('Analytics')
 
@@ -656,10 +830,13 @@ export default function AdminDashboardPage() {
       const monthly = summarizeReports(data, 'Monthly')
       const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0)
       const ridesToday = data.rides.filter(r => new Date(r.created_at) >= startOfToday).length
+      const { count: riderCount } = await supabase
+        .from('users').select('id', { count: 'exact', head: true }).eq('role', 'rider')
       setPlatformStats({
         evAuto: monthly.evFleetMix.find(v => v.type === 'ev_auto')?.count ?? 0,
         evCar: monthly.evFleetMix.find(v => v.type === 'ev_car')?.count ?? 0,
         ridesToday,
+        riders: riderCount ?? 0,
         monthlyRevenue: monthly.revenue.buckets[monthly.revenue.buckets.length - 1]?.total ?? 0,
         revenueTrend: monthly.revenue.buckets,
       })
@@ -770,7 +947,9 @@ export default function AdminDashboardPage() {
           </div>
         </header>
 
-        {activeNav === 'Subscription' ? (
+        {activeNav === 'Pricing' ? (
+          <PricingAdminPanel />
+        ) : activeNav === 'Subscription' ? (
           <SubscriptionAdminPanel />
         ) : activeNav === 'Safety' ? (
           <SafetyAdminPanel />
@@ -781,11 +960,12 @@ export default function AdminDashboardPage() {
         ) : (
         <>
         {/* KPI Cards */}
-        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 28 }}>
+        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 20, marginBottom: 28 }}>
           {[
-            { icon: 'person_pin_circle', label: 'Total Drivers',  value: drivers.length },
-            { icon: 'wifi_tethering',    label: 'Online Now',     value: activeDriverCount },
-            { icon: 'electric_car',      label: 'EV Fleet Mix',   value: platformStats ? `${platformStats.evAuto} Auto · ${platformStats.evCar} Car` : '…' },
+            { icon: 'person_pin_circle', label: 'Active Drivers',  value: totalApproved },
+            { icon: 'groups',            label: 'Riders',          value: platformStats ? platformStats.riders.toLocaleString('en-IN') : '…' },
+            { icon: 'wifi_tethering',    label: 'Online Now',      value: activeDriverCount },
+            { icon: 'electric_car',      label: 'EV Fleet Mix',    value: platformStats ? `${platformStats.evAuto} Auto · ${platformStats.evCar} Car` : '…' },
             { icon: 'account_balance_wallet', label: 'Revenue This Month', value: platformStats ? `₹${platformStats.monthlyRevenue.toLocaleString('en-IN')}` : '…' },
           ].map(card => (
             <div key={card.label} style={{
@@ -948,7 +1128,13 @@ export default function AdminDashboardPage() {
                         </div>
                       </td>
                       <td style={{ padding: '16px 24px' }}>
-                        <DocsBadge status={driver.kyc_status} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <DocsBadge status={driver.kyc_status} />
+                          <button onClick={() => setViewingDriver(driver)}
+                            style={{ fontSize: 12, fontWeight: 700, color: '#006d37', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+                            View
+                          </button>
+                        </div>
                       </td>
                       <td style={{ padding: '16px 24px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1037,6 +1223,10 @@ export default function AdminDashboardPage() {
         </>
         )}
       </main>
+
+      {viewingDriver && (
+        <DriverDocumentsPanel driver={viewingDriver} onClose={() => setViewingDriver(null)} />
+      )}
     </div>
   )
 }

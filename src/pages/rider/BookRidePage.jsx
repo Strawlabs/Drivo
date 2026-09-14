@@ -3,15 +3,40 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { notifyDriverProfile } from '@/lib/notifications'
-import { estimateFare } from '@/lib/fare'
+import { estimateFare, fetchFareConfig } from '@/lib/fare'
 import { fetchDrivingRoute } from '@/lib/routing'
 import { getCurrentLocation } from '@/lib/geocoding'
 import RealMap from '@/components/RealMap'
 import LocationSearchInput from '@/components/LocationSearchInput'
 
+// Distinct sedan / SUV silhouettes instead of a single flat Material glyph
+// for both — the Stitch mock differentiates the two classes visually. Kept
+// as generic body shapes, not a specific named car model.
+function SedanArt({ color = 'var(--color-primary)' }) {
+  return (
+    <svg width="60" height="34" viewBox="0 0 80 44" fill="none" aria-hidden="true">
+      <path d="M6 30 L16 20 C20 16 26 13 34 13 L50 13 C57 13 62 16 66 21 L74 27 C77 29 78 31 78 33 L78 34 L6 34 Z"
+        fill="rgba(0,109,55,0.10)" stroke={color} strokeWidth="2.5" strokeLinejoin="round" />
+      <circle cx="24" cy="34" r="7" fill="var(--color-surface)" stroke={color} strokeWidth="2.5" />
+      <circle cx="60" cy="34" r="7" fill="var(--color-surface)" stroke={color} strokeWidth="2.5" />
+    </svg>
+  )
+}
+function SuvArt({ color = 'var(--color-primary)' }) {
+  return (
+    <svg width="60" height="34" viewBox="0 0 80 44" fill="none" aria-hidden="true">
+      <path d="M5 30 L12 14 C14 10 18 8 24 8 L54 8 C60 8 64 10 67 15 L74 26 C77 28 78 30 78 33 L78 34 L5 34 Z"
+        fill="rgba(0,109,55,0.10)" stroke={color} strokeWidth="2.5" strokeLinejoin="round" />
+      <path d="M22 9 L22 30 M46 8 L46 30" stroke={color} strokeWidth="2" opacity="0.5" />
+      <circle cx="24" cy="34" r="7.5" fill="var(--color-surface)" stroke={color} strokeWidth="2.5" />
+      <circle cx="60" cy="34" r="7.5" fill="var(--color-surface)" stroke={color} strokeWidth="2.5" />
+    </svg>
+  )
+}
+
 const VEHICLE_TYPES = [
-  { id: 'luxe',  label: 'Drivo Luxe',  type: 'EV Sedan', icon: 'electric_car' },
-  { id: 'space', label: 'Drivo Space', type: 'EV SUV',    icon: 'directions_car' },
+  { id: 'luxe',  label: 'Drivo Luxe',  type: 'EV Sedan', Art: SedanArt },
+  { id: 'space', label: 'Drivo Space', type: 'EV SUV',    Art: SuvArt },
 ]
 
 const BANGALORE_CENTER = { lat: 12.9716, lng: 77.5946 }
@@ -21,9 +46,12 @@ export default function BookRidePage() {
   const location = useLocation()
   const { user } = useAuth()
 
-  const driver = location.state?.driver ?? {
-    name: 'Ramesh K.', rating: 4.9, avatar: 'RK', type: 'EV Sedan', eta: '3 mins',
-  }
+  // No fallback driver anymore — reaching this page with no driver in nav
+  // state now means "let the system find one" (see the search bar on rider
+  // Home), not "silently show a fake person." handleConfirm branches on
+  // this to insert either a direct booking (unchanged) or an auto-match
+  // request for the new dispatch engine to pick up.
+  const chosenDriver = location.state?.driver ?? null
 
   // Each is { address, lat, lng } — lat/lng stay null until a real place is
   // resolved (typing alone doesn't count; only picking a search result or
@@ -39,6 +67,12 @@ export default function BookRidePage() {
   const [selected, setSelected]   = useState('luxe')
   const [confirming, setConfirming] = useState(false)
   const [locationError, setLocationError] = useState('')
+
+  // Real, admin-editable fare config (fare_tiers / fare_settings) — fetched
+  // once; estimateFare falls back to sane defaults on its own if this is
+  // still null (e.g. offline) rather than the page ever blocking on it.
+  const [fareConfig, setFareConfig] = useState(null)
+  useEffect(() => { fetchFareConfig().then(setFareConfig).catch(() => {}) }, [])
 
   // Auto-detect current location for pickup on arrival, matching Uber/
   // Rapido — same real address the rider would otherwise have to search
@@ -82,9 +116,9 @@ export default function BookRidePage() {
 
   const vehicleOptions = useMemo(() => VEHICLE_TYPES.map(v => {
     if (!bothResolved || sameLocation) return { ...v, fare: 0, distanceKm: 0, etaMin: 0, sub: `${v.type}` }
-    const { fare, distanceKm, etaMin } = estimateFare(pickup, destination, v.id)
+    const { fare, distanceKm, etaMin } = estimateFare(pickup, destination, v.id, fareConfig)
     return { ...v, fare, distanceKm, etaMin, sub: `${v.type} · ${etaMin} min` }
-  }), [pickup.lat, pickup.lng, destination.lat, destination.lng, bothResolved, sameLocation])
+  }), [pickup.lat, pickup.lng, destination.lat, destination.lng, bothResolved, sameLocation, fareConfig])
 
   const selectedVehicle = vehicleOptions.find(v => v.id === selected)
   const fare = selectedVehicle.fare
@@ -104,8 +138,9 @@ export default function BookRidePage() {
     try {
       const { data, error } = await supabase.from('rides').insert({
         rider_id: user.id,
-        driver_id: driver.id ?? null,
-        vehicle_id: driver.vehicleId ?? null,
+        driver_id: chosenDriver?.id ?? null,
+        vehicle_id: chosenDriver?.vehicleId ?? null,
+        dispatch_mode: chosenDriver ? 'direct' : 'auto',
         pickup_address: pickup.address,
         pickup_latitude: pickup.lat,
         pickup_longitude: pickup.lng,
@@ -117,18 +152,21 @@ export default function BookRidePage() {
       }).select().single()
       if (error) throw error
 
-      if (driver.id) {
-        notifyDriverProfile(driver.id, {
+      if (chosenDriver?.id) {
+        notifyDriverProfile(chosenDriver.id, {
           category: 'driver_request',
           title: 'New ride request',
           body: `A rider wants a ride from ${pickup.address} to ${destination.address}.`,
           data: { rideId: data.id },
         }).catch(() => {})
       }
+      // No driver chosen — the dispatch_pending_rides cron job finds and
+      // notifies a real candidate on its next tick (every minute); nothing
+      // to notify yet since nobody's been offered this ride.
 
       navigate('/rider/active-ride', {
         state: {
-          rideId: data.id, driver, fare, rideStatus: 'requested',
+          rideId: data.id, driver: chosenDriver, fare, rideStatus: 'requested',
           pickup: pickup.address, pickupCoords: { lat: pickup.lat, lng: pickup.lng },
           destination: destination.address, destinationCoords: { lat: destination.lat, lng: destination.lng },
           distanceKm: selectedVehicle.distanceKm, etaMin: selectedVehicle.etaMin,
@@ -158,7 +196,7 @@ export default function BookRidePage() {
         <div className="flex items-center gap-3">
           <span className="material-symbols-outlined" style={{ color: 'var(--color-primary)' }}>notifications</span>
           <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700 }}>
-            {driver.avatar?.[0] ?? 'U'}
+            {chosenDriver?.avatar?.[0] ?? 'U'}
           </div>
         </div>
       </header>
@@ -230,27 +268,42 @@ export default function BookRidePage() {
               {selected === v.id && (
                 <span className="material-symbols-outlined" style={{ position:'absolute', top:6, right:6, fontSize:18, color:'var(--color-primary)', fontVariationSettings:"'FILL' 1" }}>check_circle</span>
               )}
-              <span className="material-symbols-outlined" style={{ fontSize: 40, color: 'var(--color-primary)', marginBottom: 6 }}>{v.icon}</span>
+              <span style={{ marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', height: 40 }}><v.Art /></span>
               <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-on-surface)' }}>{v.label}</p>
               <p style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{v.sub}</p>
             </button>
           ))}
         </div>
 
-        {/* Driver + fare */}
+        {/* Driver + fare — a specific driver when one was chosen (Preferred
+            Drivers, a driver's profile, a nearby-driver card); otherwise
+            this is an auto-match request, so there's no name to show yet —
+            the dispatch engine finds a real candidate after Confirm. */}
         <div className="flex items-center justify-between mb-5" style={{ background: 'var(--color-surface-container-lowest)', border: '1px solid var(--color-outline-variant)', borderRadius: 12, padding: 14 }}>
-          <div className="flex items-center gap-3">
-            <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 16 }}>
-              {driver.avatar}
-            </div>
-            <div>
-              <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)' }}>{driver.name}</p>
-              <div className="flex items-center gap-1">
-                <span className="material-symbols-outlined" style={{ fontSize: 13, color: '#F59E0B', fontVariationSettings:"'FILL' 1" }}>star</span>
-                <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{driver.rating} · EV Certified</span>
+          {chosenDriver ? (
+            <div className="flex items-center gap-3">
+              <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 16 }}>
+                {chosenDriver.avatar}
+              </div>
+              <div>
+                <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)' }}>{chosenDriver.name}</p>
+                <div className="flex items-center gap-1">
+                  <span className="material-symbols-outlined" style={{ fontSize: 13, color: '#F59E0B', fontVariationSettings:"'FILL' 1" }}>star</span>
+                  <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{chosenDriver.rating} · EV Certified</span>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'var(--color-secondary-container)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span className="material-symbols-outlined" style={{ color: 'var(--color-on-secondary-container)' }}>search</span>
+              </div>
+              <div>
+                <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)' }}>We'll find you a driver</p>
+                <p style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>Nearest available EV, matched after you confirm</p>
+              </div>
+            </div>
+          )}
           <div style={{ textAlign: 'right' }}>
             <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--color-primary)', lineHeight: 1 }}>{bothResolved && !sameLocation ? `₹${fare}` : '—'}</p>
             <p style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>Est. Fare</p>

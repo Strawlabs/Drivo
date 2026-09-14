@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchPreferredDriversForRider } from '@/lib/preferredDrivers'
 import { fetchFamilyMembers, fetchUpcomingScheduledRides, scheduleRide, cancelScheduledRide } from '@/lib/family'
 import LocationSearchInput from '@/components/LocationSearchInput'
+import RiderBottomNav from '@/components/RiderBottomNav'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const DAY_NAMES = ['Mo','Tu','We','Th','Fr','Sa','Su']
@@ -204,7 +205,7 @@ export default function ScheduledRidesPage() {
         </div>
       </header>
 
-      <main style={{ flex: 1, maxWidth: 480, width: '100%', margin: '0 auto', padding: '20px 20px 120px', overflowY: 'auto' }}>
+      <main style={{ flex: 1, maxWidth: 480, width: '100%', margin: '0 auto', padding: '20px 20px 200px', overflowY: 'auto' }}>
 
         {/* Success Banner */}
         {scheduled && (
@@ -367,8 +368,8 @@ export default function ScheduledRidesPage() {
         )}
       </main>
 
-      {/* Sticky CTA */}
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '16px 20px 32px', background: 'linear-gradient(to top, var(--color-surface) 70%, transparent)', zIndex: 30 }}>
+      {/* Sticky CTA — sits just above the bottom nav */}
+      <div style={{ position: 'fixed', bottom: 64, left: 0, right: 0, padding: '16px 20px 12px', background: 'linear-gradient(to top, var(--color-surface) 78%, transparent)', zIndex: 40 }}>
         <div style={{ maxWidth: 480, margin: '0 auto' }}>
           <button onClick={handleSchedule} disabled={scheduling}
             style={{ width: '100%', height: 56, background: 'var(--color-primary)', color: 'white', borderRadius: 14, border: 'none', fontSize: 16, fontWeight: 700, cursor: scheduling ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, boxShadow: '0 4px 16px rgba(0,109,55,0.25)', transition: 'all 0.2s', opacity: scheduling ? 0.8 : 1 }}>
@@ -386,6 +387,8 @@ export default function ScheduledRidesPage() {
           </button>
         </div>
       </div>
+
+      <RiderBottomNav active="trips" />
 
       <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
     </div>

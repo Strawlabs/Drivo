@@ -1,7 +1,11 @@
+import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/hooks/useAuth.jsx'
 import LoginPage from '@/pages/auth/LoginPage'
 import RegisterPage from '@/pages/auth/RegisterPage'
+import LandingPage from '@/pages/LandingPage'
+import OnboardingPage from '@/pages/OnboardingPage'
+import SplashScreen from '@/pages/SplashScreen'
 import RiderHomePage from '@/pages/rider/HomePage'
 import BookRidePage from '@/pages/rider/BookRidePage'
 import DriverProfilePage from '@/pages/rider/DriverProfilePage'
@@ -10,8 +14,10 @@ import ActiveRidePage from '@/pages/rider/ActiveRidePage'
 import RideCompletePage from '@/pages/rider/RideCompletePage'
 import ScheduledRidesPage from '@/pages/rider/ScheduledRidesPage'
 import FamilyPage from '@/pages/rider/FamilyPage'
+import PreferredDriversPage from '@/pages/rider/PreferredDriversPage'
 import RiderSubscriptionPage from '@/pages/rider/SubscriptionPage'
 import DriverHomePage from '@/pages/driver/HomePage'
+import DriverGoHomePage from '@/pages/driver/GoHomePage'
 import DriverVerificationPage from '@/pages/driver/VerificationPage'
 import DriverSubscriptionPage from '@/pages/driver/SubscriptionPage'
 import DriverAdsPage from '@/pages/driver/AdsPage'
@@ -41,7 +47,7 @@ function SmartRedirect() {
   const { user, role, loading } = useAuth()
 
   if (loading) return <Spinner />
-  if (!user) return <Navigate to="/login" replace />
+  if (!user) return <LandingPage />
   if (role === 'rider')  return <Navigate to="/rider/home" replace />
   if (role === 'driver') return <Navigate to="/driver/home" replace />
   if (role === 'admin')  return <Navigate to="/admin/dashboard" replace />
@@ -102,6 +108,9 @@ function AppRoutes() {
       {/* Public auth pages */}
       <Route path="/login"    element={<PublicRoute><LoginPage /></PublicRoute>} />
 
+      {/* First-run intro carousel — public, part of the pre-login funnel */}
+      <Route path="/welcome" element={<OnboardingPage />} />
+
       {/* Registration — authenticated but no role yet */}
       <Route path="/register" element={<UnregisteredRoute><RegisterPage /></UnregisteredRoute>} />
 
@@ -117,11 +126,13 @@ function AppRoutes() {
       <Route path="/rider/ride-complete" element={<RoleRoute allowedRole="rider"><RideCompletePage /></RoleRoute>} />
       <Route path="/rider/schedule"      element={<RoleRoute allowedRole="rider"><ScheduledRidesPage /></RoleRoute>} />
       <Route path="/rider/family"        element={<RoleRoute allowedRole="rider"><FamilyPage /></RoleRoute>} />
+      <Route path="/rider/preferred-drivers" element={<RoleRoute allowedRole="rider"><PreferredDriversPage /></RoleRoute>} />
       <Route path="/rider/subscription"  element={<RoleRoute allowedRole="rider"><RiderSubscriptionPage /></RoleRoute>} />
       <Route path="/rider/notifications" element={<RoleRoute allowedRole="rider"><NotificationsPage /></RoleRoute>} />
 
       {/* Driver pages */}
       <Route path="/driver/home"         element={<RoleRoute allowedRole="driver"><DriverHomePage /></RoleRoute>} />
+      <Route path="/driver/go-home"      element={<RoleRoute allowedRole="driver"><DriverGoHomePage /></RoleRoute>} />
       <Route path="/driver/verification" element={<RoleRoute allowedRole="driver"><DriverVerificationPage /></RoleRoute>} />
       <Route path="/driver/subscription" element={<RoleRoute allowedRole="driver"><DriverSubscriptionPage /></RoleRoute>} />
       <Route path="/driver/ads"          element={<RoleRoute allowedRole="driver"><DriverAdsPage /></RoleRoute>} />
@@ -136,11 +147,33 @@ function AppRoutes() {
   )
 }
 
+/*
+  Cold-start splash — shows the branded SplashScreen once per browser
+  session (sessionStorage flag), then reveals the app. Route-level auth
+  spinners still handle in-app transitions.
+*/
+function BootSplash({ children }) {
+  const [booting, setBooting] = useState(() => {
+    try { return !sessionStorage.getItem('drivo_booted') } catch { return false }
+  })
+  useEffect(() => {
+    if (!booting) return
+    const t = setTimeout(() => {
+      try { sessionStorage.setItem('drivo_booted', '1') } catch { /* private mode */ }
+      setBooting(false)
+    }, 1800)
+    return () => clearTimeout(t)
+  }, [booting])
+  return booting ? <SplashScreen /> : children
+}
+
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <BootSplash>
+          <AppRoutes />
+        </BootSplash>
       </AuthProvider>
     </BrowserRouter>
   )

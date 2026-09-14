@@ -190,3 +190,13 @@
     html { scroll-behavior: smooth; }
   }
 }
+
+/*
+  Fakes a dark basemap on top of the plain (light-only) public OpenStreetMap
+  tile server — see RealMap.jsx for why. Scoped to the tile <img>s Leaflet
+  renders (via TileLayer's className), so markers/routes/UI on top are
+  untouched.
+*/
+.drivo-dark-tiles {
+  filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92) saturate(0.35);
+}

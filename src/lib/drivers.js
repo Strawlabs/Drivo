@@ -8,7 +8,7 @@ import { supabase } from '@/lib/supabase'
 export async function fetchAvailableDrivers({ excludeDriverId } = {}) {
   let query = supabase
     .from('driver_profiles')
-    .select('id, rating, users(name), vehicles(id, make, model, vehicle_type)')
+    .select('id, rating, current_latitude, current_longitude, users(name), vehicles(id, make, model, vehicle_type)')
     .eq('status', 'approved')
     .eq('is_online', true)
 
@@ -32,6 +32,8 @@ export async function fetchAvailableDrivers({ excludeDriverId } = {}) {
       type: vehicle ? [vehicle.make, vehicle.model].filter(Boolean).join(' ') : 'EV',
       vehicleType: vehicle?.vehicle_type ?? null,
       isPriority: priorityIds.has(d.id),
+      lat: d.current_latitude != null ? Number(d.current_latitude) : null,
+      lng: d.current_longitude != null ? Number(d.current_longitude) : null,
     }
   })
 
@@ -56,6 +58,31 @@ async function fetchElitePriorityDriverIds(driverIds) {
   if (error) return new Set()
 
   return new Set((data ?? []).filter(row => row.subscription_plans?.name === 'elite').map(row => row.driver_id))
+}
+
+/*
+  Just enough to render an active-ride card — used when the dispatch
+  engine (dispatch_pending_rides, see schema.sql) assigns a driver the
+  rider never picked themselves, so ActiveRidePage has a real name/rating/
+  vehicle to show instead of nothing. fetchDriverProfile below fetches
+  much more (reviews, tier, KYC) than that screen needs.
+*/
+export async function fetchDriverBasicInfo(driverId) {
+  const { data, error } = await supabase
+    .from('driver_profiles')
+    .select('id, rating, users(name), vehicles(make, model, vehicle_type)')
+    .eq('id', driverId)
+    .maybeSingle()
+  if (error || !data) return null
+  const vehicle = data.vehicles?.[0] ?? null
+  const name = data.users?.name?.trim() || 'Driver'
+  return {
+    id: data.id,
+    name,
+    avatar: name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+    rating: data.rating ?? 5.0,
+    type: vehicle ? [vehicle.make, vehicle.model].filter(Boolean).join(' ') : 'EV',
+  }
 }
 
 /*

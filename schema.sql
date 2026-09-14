@@ -1115,3 +1115,445 @@ create policy "rider_subscriptions_update_own_or_admin"
   );
 
 create index if not exists rider_subscriptions_rider_idx on public.rider_subscriptions (rider_id, status);
+
+-- ============================================================
+-- SERVER-SIDE SCHEDULED JOBS (pg_cron)
+-- ============================================================
+-- Every timed feature below used to be a setInterval/setTimeout running
+-- only while some browser tab happened to be open (Go Home Mode expiry,
+-- UPI payment timeout, subscription grace/expiry, scheduled-ride dispatch
+-- + reminders — see the client-side comments this replaces in
+-- src/lib/goHome.js, src/lib/payments.js, src/lib/subscriptions.js,
+-- src/lib/riderSubscriptions.js, src/lib/family.js). These pg_cron jobs
+-- are the real, always-on version of the same logic; the client-side
+-- versions are left in place as a fast local nudge when a tab IS open,
+-- but are no longer what makes any of this actually happen.
+--
+-- Re-runnable: each job is unscheduled before being (re)scheduled, so
+-- pasting this whole block again (e.g. after an edit) is safe.
+
+create extension if not exists pg_cron;
+
+-- Go Home Mode: expire any active session whose end_time has passed.
+create or replace function public.expire_stale_go_home_sessions()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.go_home_sessions
+  set status = 'expired', updated_at = now()
+  where status = 'active' and end_time < now();
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'expire-go-home-sessions';
+select cron.schedule('expire-go-home-sessions', '* * * * *', $$select public.expire_stale_go_home_sessions();$$);
+
+-- UPI ride payments: no gateway callback exists for this MVP, so a
+-- pending UPI payment nobody confirms within 2 minutes fails instead of
+-- sitting pending forever (mirrors RideCompletePage's client-side timer).
+create or replace function public.expire_stale_upi_payments()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.payments
+  set status = 'failed'
+  where status = 'pending'
+    and method = 'upi'
+    and created_at < now() - interval '120 seconds';
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'expire-stale-upi-payments';
+select cron.schedule('expire-stale-upi-payments', '* * * * *', $$select public.expire_stale_upi_payments();$$);
+
+-- Driver subscriptions: active -> grace_period once expiry_date has
+-- passed, grace_period/active -> expired once GRACE_PERIOD_DAYS (3) further.
+create or replace function public.update_driver_subscription_statuses()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.driver_subscriptions
+  set status = 'grace_period'
+  where status = 'active'
+    and expiry_date < current_date
+    and expiry_date >= current_date - 3;
+
+  update public.driver_subscriptions
+  set status = 'expired'
+  where status in ('active', 'grace_period')
+    and expiry_date < current_date - 3;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'update-driver-subscription-statuses';
+select cron.schedule('update-driver-subscription-statuses', '0 1 * * *', $$select public.update_driver_subscription_statuses();$$);
+
+-- Rider subscriptions: same active -> grace_period -> expired transition.
+create or replace function public.update_rider_subscription_statuses()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.rider_subscriptions
+  set status = 'grace_period'
+  where status = 'active'
+    and expiry_date < current_date
+    and expiry_date >= current_date - 3;
+
+  update public.rider_subscriptions
+  set status = 'expired'
+  where status in ('active', 'grace_period')
+    and expiry_date < current_date - 3;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'update-rider-subscription-statuses';
+select cron.schedule('update-rider-subscription-statuses', '0 1 * * *', $$select public.update_rider_subscription_statuses();$$);
+
+-- Scheduled rides: dispatch every row whose scheduled_at has arrived into
+-- a real ride request, and notify the rider (+ preferred driver, if any).
+create or replace function public.dispatch_due_scheduled_rides()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  sr record;
+  new_ride_id uuid;
+  driver_user_id uuid;
+begin
+  for sr in
+    select * from public.scheduled_rides
+    where status = 'scheduled' and scheduled_at <= now()
+  loop
+    insert into public.rides (rider_id, driver_id, pickup_address, destination_address, status)
+    values (sr.rider_id, sr.preferred_driver_id, sr.pickup_address, sr.destination_address, 'requested')
+    returning id into new_ride_id;
+
+    update public.scheduled_rides
+    set status = 'dispatched', ride_id = new_ride_id
+    where id = sr.id;
+
+    insert into public.notifications (user_id, category, title, body)
+    values (
+      sr.rider_id, 'ride_alert', 'Scheduled ride starting',
+      'Your scheduled ride to ' || sr.destination_address || ' is now being requested.'
+    );
+
+    if sr.preferred_driver_id is not null then
+      select user_id into driver_user_id from public.driver_profiles where id = sr.preferred_driver_id;
+      if driver_user_id is not null then
+        insert into public.notifications (user_id, category, title, body, data)
+        values (
+          driver_user_id, 'driver_request', 'New ride request',
+          'A rider wants a ride from ' || sr.pickup_address || ' to ' || sr.destination_address || '.',
+          jsonb_build_object('rideId', new_ride_id)
+        );
+      end if;
+    end if;
+  end loop;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'dispatch-due-scheduled-rides';
+select cron.schedule('dispatch-due-scheduled-rides', '* * * * *', $$select public.dispatch_due_scheduled_rides();$$);
+
+-- Scheduled-ride reminders: notify once, ~30 min ahead of the scheduled
+-- time (reminder_sent_at guards against sending the same reminder twice).
+create or replace function public.send_due_scheduled_ride_reminders()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  sr record;
+begin
+  for sr in
+    select * from public.scheduled_rides
+    where status = 'scheduled'
+      and reminder_sent_at is null
+      and scheduled_at > now()
+      and scheduled_at <= now() + interval '30 minutes'
+  loop
+    insert into public.notifications (user_id, category, title, body)
+    values (
+      sr.rider_id, 'ride_alert', 'Upcoming ride reminder',
+      'Your ride to ' || sr.destination_address || ' is scheduled for ' ||
+        to_char(sr.scheduled_at at time zone 'Asia/Kolkata', 'HH12:MI AM') ||
+        ' — pickup at ' || sr.pickup_address || '.'
+    );
+
+    update public.scheduled_rides set reminder_sent_at = now() where id = sr.id;
+  end loop;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'send-scheduled-ride-reminders';
+select cron.schedule('send-scheduled-ride-reminders', '* * * * *', $$select public.send_due_scheduled_ride_reminders();$$);
+
+-- ============================================================
+-- AUTOMATIC DISPATCH / MATCHING ENGINE
+-- ============================================================
+-- Every EXISTING booking path (Preferred Drivers "Request Ride", a
+-- driver's own "Request Ride Now", "Book" from a nearby-driver card)
+-- keeps working exactly as before: they set rides.driver_id at insert
+-- time and are untouched by any of this. dispatch_mode defaults to
+-- 'direct' for every one of them.
+--
+-- This adds a second, new mode: a rider requests a ride with NO driver
+-- chosen (dispatch_mode = 'auto', driver_id = null at insert), and this
+-- cron-driven engine finds and offers it to real candidates — preferred
+-- driver first if one's online, else the nearest eligible online driver
+-- — one at a time, with the existing 30s accept window (now also
+-- enforced server-side, not just by the client's countdown), retrying
+-- with the next candidate on reject/timeout, until one accepts or 5
+-- minutes pass with nobody found.
+
+alter table public.rides add column if not exists dispatch_mode text not null default 'direct' check (dispatch_mode in ('direct', 'auto'));
+alter table public.rides add column if not exists offered_at timestamptz;
+alter table public.rides add column if not exists tried_driver_ids uuid[] not null default '{}';
+alter table public.rides add column if not exists requested_vehicle_type text check (requested_vehicle_type in ('ev_auto', 'ev_car'));
+
+create or replace function public.haversine_km(lat1 numeric, lng1 numeric, lat2 numeric, lng2 numeric)
+returns numeric
+language sql
+immutable
+as $$
+  select 6371 * 2 * asin(sqrt(
+    sin(radians(lat2 - lat1) / 2) ^ 2 +
+    cos(radians(lat1)) * cos(radians(lat2)) * sin(radians(lng2 - lng1) / 2) ^ 2
+  ));
+$$;
+
+-- Simplified server-side port of src/lib/goHome.js's matchGoHomeRide —
+-- just the two hard gates that don't need the driver's live position
+-- (homeward progress, drop-inside-zone), since dispatch only has the
+-- ride's coordinates and the driver's last reported location, not a
+-- full re-run of the client's richer scoring. A driver in Go Home Mode
+-- who's incompatible with a ride is simply never offered it here; their
+-- existing client-side matchGoHomeRide keeps handling the direct-
+-- booking path exactly as it already did, untouched.
+create or replace function public.driver_compatible_with_go_home(
+  p_driver_id uuid, p_destination_lat numeric, p_destination_lng numeric,
+  p_pickup_lat numeric, p_pickup_lng numeric
+)
+returns boolean
+language plpgsql
+stable
+as $$
+declare
+  gh record;
+  gap_drop numeric;
+  gap_pickup numeric;
+begin
+  select * into gh from public.go_home_sessions
+  where driver_id = p_driver_id and status = 'active' and end_time > now()
+  limit 1;
+
+  if gh is null then
+    return true;
+  end if;
+
+  if p_destination_lat is null or p_destination_lng is null then
+    return false;
+  end if;
+
+  gap_drop := public.haversine_km(p_destination_lat, p_destination_lng, gh.home_zone_latitude, gh.home_zone_longitude);
+  if gap_drop > gh.home_zone_radius_km + 2.0 then
+    return false;
+  end if;
+
+  if p_pickup_lat is not null and p_pickup_lng is not null then
+    gap_pickup := public.haversine_km(p_pickup_lat, p_pickup_lng, gh.home_zone_latitude, gh.home_zone_longitude);
+    if (gap_pickup - gap_drop) < 2.0 then
+      return false;
+    end if;
+  end if;
+
+  return true;
+end;
+$$;
+
+create or replace function public.dispatch_pending_rides()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  r record;
+  candidate_id uuid;
+begin
+  -- 1) Offers nobody answered in 30s go back in the pool; remember not
+  --    to re-offer the same driver for this same ride.
+  update public.rides
+  set tried_driver_ids = array_append(tried_driver_ids, driver_id),
+      driver_id = null,
+      offered_at = null
+  where dispatch_mode = 'auto'
+    and status = 'requested'
+    and driver_id is not null
+    and offered_at < now() - interval '30 seconds';
+
+  -- 2) Give up on a search that's found nobody in 5 minutes.
+  update public.rides
+  set status = 'expired'
+  where dispatch_mode = 'auto'
+    and status = 'requested'
+    and driver_id is null
+    and created_at < now() - interval '5 minutes';
+
+  -- 3) Offer every still-searching ride to its best untried candidate.
+  for r in
+    select * from public.rides
+    where dispatch_mode = 'auto' and status = 'requested' and driver_id is null
+  loop
+    candidate_id := null;
+
+    -- Preferred driver gets first refusal, if online/eligible/untried.
+    select dp.id into candidate_id
+    from public.preferred_drivers pd
+    join public.driver_profiles dp on dp.id = pd.driver_id
+    where pd.rider_id = r.rider_id
+      and pd.status = 'active'
+      and dp.status = 'approved'
+      and dp.is_online = true
+      and not (dp.id = any(r.tried_driver_ids))
+      and not exists (select 1 from public.rides x where x.driver_id = dp.id and x.status in ('accepted', 'active'))
+      and exists (
+        select 1 from public.vehicles v where v.driver_id = dp.id and v.is_active
+          and (r.requested_vehicle_type is null or v.vehicle_type = r.requested_vehicle_type)
+      )
+      and public.driver_compatible_with_go_home(dp.id, r.destination_latitude, r.destination_longitude, r.pickup_latitude, r.pickup_longitude)
+    limit 1;
+
+    -- Otherwise, the nearest eligible online driver (unknown location
+    -- sorts last rather than being excluded, same fallback pattern used
+    -- everywhere else real GPS is optional in this app).
+    if candidate_id is null then
+      select dp.id into candidate_id
+      from public.driver_profiles dp
+      where dp.status = 'approved'
+        and dp.is_online = true
+        and not (dp.id = any(r.tried_driver_ids))
+        and not exists (select 1 from public.rides x where x.driver_id = dp.id and x.status in ('accepted', 'active'))
+        and exists (
+          select 1 from public.vehicles v where v.driver_id = dp.id and v.is_active
+            and (r.requested_vehicle_type is null or v.vehicle_type = r.requested_vehicle_type)
+        )
+        and public.driver_compatible_with_go_home(dp.id, r.destination_latitude, r.destination_longitude, r.pickup_latitude, r.pickup_longitude)
+      order by
+        case when dp.current_latitude is not null and r.pickup_latitude is not null
+          then public.haversine_km(dp.current_latitude, dp.current_longitude, r.pickup_latitude, r.pickup_longitude)
+          else 999999
+        end asc
+      limit 1;
+    end if;
+
+    if candidate_id is not null then
+      update public.rides
+      set driver_id = candidate_id, offered_at = now()
+      where id = r.id;
+
+      insert into public.notifications (user_id, category, title, body, data)
+      select dp.user_id, 'driver_request', 'New ride request',
+             'A rider wants a ride from ' || coalesce(r.pickup_address, 'their pickup') || ' to ' || coalesce(r.destination_address, 'their destination') || '.',
+             jsonb_build_object('rideId', r.id)
+      from public.driver_profiles dp where dp.id = candidate_id;
+    end if;
+  end loop;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'dispatch-pending-rides';
+select cron.schedule('dispatch-pending-rides', '* * * * *', $$select public.dispatch_pending_rides();$$);
+
+-- ============================================================
+-- REAL KYC REVIEW — storage policies for the kyc-documents bucket
+-- ============================================================
+-- The bucket already exists (private) and DriverVerificationPage has
+-- been uploading real files to it — driver_profiles.kyc_status just had
+-- no policy letting anyone actually READ them back, so "approve" on the
+-- admin dashboard was a rubber stamp with nothing behind it. Files are
+-- stored as "<user_id>/<doc_id>.<ext>", so storage.foldername(name)[1]
+-- is the owning driver's own auth uid — that's the whole access rule.
+create policy "kyc_documents_insert_own"
+  on storage.objects for insert
+  with check (
+    bucket_id = 'kyc-documents'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+create policy "kyc_documents_update_own"
+  on storage.objects for update
+  using (bucket_id = 'kyc-documents' and (storage.foldername(name))[1] = auth.uid()::text)
+  with check (bucket_id = 'kyc-documents' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "kyc_documents_select_own_or_admin"
+  on storage.objects for select
+  using (
+    bucket_id = 'kyc-documents'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+    )
+  );
+
+-- ============================================================
+-- REAL PRICING ENGINE — admin-editable fare config
+-- ============================================================
+-- src/lib/fare.js had BASE_FARE / PER_KM_RATE / MIN_FARE / ROUTE_FACTOR /
+-- AVG_SPEED_KMH hardcoded as JS constants — the PRD explicitly leaves the
+-- actual fare model undecided, same gap driver/rider subscription pricing
+-- had until subscription_plans.price got made admin-editable. This is the
+-- same fix for ride fares: two tiers (luxe/space) plus one shared row for
+-- the route/traffic assumptions that aren't tier-specific.
+
+create table if not exists public.fare_tiers (
+  tier text primary key check (tier in ('luxe', 'space')),
+  label text not null,
+  base_fare numeric(10,2) not null,
+  per_km_rate numeric(10,2) not null,
+  min_fare numeric(10,2) not null,
+  updated_at timestamptz not null default now()
+);
+insert into public.fare_tiers (tier, label, base_fare, per_km_rate, min_fare) values
+  ('luxe',  'Drivo Luxe (EV Sedan)', 40, 13, 80),
+  ('space', 'Drivo Space (EV SUV)',  40, 18, 110)
+on conflict (tier) do nothing;
+
+create table if not exists public.fare_settings (
+  id int primary key default 1,
+  route_factor numeric(4,2) not null default 1.3,
+  avg_speed_kmh numeric(5,2) not null default 22,
+  updated_at timestamptz not null default now()
+);
+insert into public.fare_settings (id) values (1) on conflict (id) do nothing;
+
+alter table public.fare_tiers enable row level security;
+alter table public.fare_settings enable row level security;
+
+-- Every rider needs to read these to estimate a fare before booking;
+-- only an admin can change them.
+create policy "fare_tiers_select_all" on public.fare_tiers for select using (true);
+create policy "fare_tiers_admin_write" on public.fare_tiers for all
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+create policy "fare_settings_select_all" on public.fare_settings for select using (true);
+create policy "fare_settings_admin_write" on public.fare_settings for all
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
