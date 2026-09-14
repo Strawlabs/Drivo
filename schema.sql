@@ -83,6 +83,7 @@ create table public.rides (
   duration_minutes int,
   cancellation_reason text,
   cancelled_by uuid references public.users(id),
+  accepted_at timestamptz,
   started_at timestamptz,
   completed_at timestamptz,
   created_at timestamptz not null default now(),
@@ -1557,3 +1558,16 @@ create policy "fare_settings_select_all" on public.fare_settings for select usin
 create policy "fare_settings_admin_write" on public.fare_settings for all
   using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
   with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- ============================================================
+-- CANCELLATION VISIBILITY
+-- A rider cancelling after a driver accepted was previously
+-- indistinguishable from cancelling a still-unmatched request — nothing
+-- recorded when acceptance happened, so admin reporting couldn't tell
+-- "cancelled instantly" from "driver was already on the way." This adds
+-- the one missing timestamp so the app can classify cancellations by
+-- stage (before acceptance / after acceptance / after the ride started)
+-- without changing any existing behavior.
+-- ============================================================
+
+alter table public.rides add column if not exists accepted_at timestamptz;

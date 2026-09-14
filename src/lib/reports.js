@@ -37,7 +37,7 @@ export async function fetchPlatformData() {
 
   const [driversRes, ridesRes, subsRes, prefRes, campaignsRes, assignmentsRes, vehiclesRes] = await Promise.all([
     supabase.from('driver_profiles').select('id, status, created_at'),
-    supabase.from('rides').select('id, status, created_at, final_fare, estimated_fare').gte('created_at', since),
+    supabase.from('rides').select('id, status, created_at, final_fare, estimated_fare, accepted_at, started_at').gte('created_at', since),
     supabase.from('driver_subscriptions').select('id, status, created_at, subscription_plans(name, price)').gte('created_at', since),
     supabase.from('preferred_drivers').select('id, status, saved_at').gte('saved_at', since),
     supabase.from('ad_campaigns').select('id, status, revenue_share_percent'),
@@ -71,6 +71,21 @@ export function summarizeReports(data, period) {
     completed: b.rows.filter(r => r.status === 'completed').length,
   }))
   const totalRidesAllTime = rides.length
+
+  // Cancellations by stage — the driver never even saw the ride yet
+  // ('requested' when cancelled) vs. had already accepted vs. had
+  // already started driving/driving the trip. accepted_at only exists
+  // going forward (added alongside this report), so any older cancelled
+  // ride with no accepted_at is conservatively bucketed as "before
+  // acceptance" rather than guessed at.
+  const cancelledRides = rides.filter(r => r.status === 'cancelled')
+  const cancellationsByStage = [
+    { stage: 'before_acceptance', count: cancelledRides.filter(r => !r.accepted_at).length },
+    { stage: 'after_acceptance',  count: cancelledRides.filter(r => r.accepted_at && !r.started_at).length },
+    { stage: 'after_start',       count: cancelledRides.filter(r => r.started_at).length },
+  ]
+  const cancellationBuckets = bucketize(cancelledRides, 'created_at', period).map(b => ({ label: b.label, cancelled: b.rows.length }))
+  const cancellationRate = totalRidesAllTime === 0 ? 0 : Math.round((cancelledRides.length / totalRidesAllTime) * 100)
 
   // Revenue — subscription revenue (real platform revenue per the
   // product model: drivers pay Drivo directly, ride fares go straight
@@ -115,6 +130,7 @@ export function summarizeReports(data, period) {
   return {
     driverGrowth: { buckets: driverBuckets, totalApproved, totalDrivers },
     rideVolume: { buckets: rideBuckets, totalRidesAllTime },
+    cancellations: { buckets: cancellationBuckets, byStage: cancellationsByStage, total: cancelledRides.length, rate: cancellationRate },
     revenue: { buckets: revenueBuckets, totalSubscriptionRevenue, totalAdRevenue, totalRevenue: totalSubscriptionRevenue + totalAdRevenue },
     subscriptionMix,
     evFleetMix,

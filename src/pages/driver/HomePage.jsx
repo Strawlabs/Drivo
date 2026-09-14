@@ -880,7 +880,7 @@ export default function DriverHomePage() {
     // reassigned it to someone else a moment before this tap landed.
     const { data: accepted, error } = await supabase
       .from('rides')
-      .update({ status: 'accepted' })
+      .update({ status: 'accepted', accepted_at: new Date().toISOString() })
       .eq('id', ride.id)
       .eq('driver_id', driverProfileId)
       .eq('status', 'requested')

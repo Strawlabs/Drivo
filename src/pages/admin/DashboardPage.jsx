@@ -732,6 +732,16 @@ function ReportsAdminPanel() {
         <ReportCard title="Preferred Driver Usage" subtitle={`${report.preferredDriverUsage.totalActivePreferred} active relationships today`}>
           <MiniBarChart buckets={report.preferredDriverUsage.buckets} series={[{ key: 'newSaves', color: '#2ecc71' }]} />
         </ReportCard>
+
+        <ReportCard title="Cancellations" subtitle={`${report.cancellations.total} cancelled (${report.cancellations.rate}% of all rides)`}>
+          <MiniBarChart buckets={report.cancellations.buckets} series={[{ key: 'cancelled', color: '#ba1a1a' }]} />
+          {report.cancellations.byStage.map(s => (
+            <div key={s.stage} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: '1px solid #e5eeff', fontSize: 12, color: '#4f6073' }}>
+              <span>{{ before_acceptance: 'Before a driver accepted', after_acceptance: 'After acceptance, before start', after_start: 'After the ride started' }[s.stage]}</span>
+              <span style={{ fontWeight: 700, color: '#0b1c30' }}>{s.count}</span>
+            </div>
+          ))}
+        </ReportCard>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
