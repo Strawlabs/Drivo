@@ -22,31 +22,16 @@ export async function fetchPlans() {
   return data ?? []
 }
 
-// No backend cron exists (same constraint as driver subscriptions) —
-// expiry/grace-period transitions are computed here, client-side,
-// anchored to real dates, called on load before reading status anywhere.
-export async function checkAndUpdateSubscriptionStatus(riderId) {
-  const { data: rows, error } = await supabase
-    .from('rider_subscriptions')
-    .select('id, status, expiry_date')
-    .eq('rider_id', riderId)
-    .in('status', ['active', 'grace_period'])
+// A real pg_cron job (update_rider_subscription_statuses, see schema.sql)
+// already runs this exact active -> grace_period -> expired transition
+// once a day platform-wide. This just calls the same security-definer
+// function on demand so a rider who opens the app mid-day sees a
+// freshly-correct status instead of waiting for the next cron tick —
+// and (since rider_subscriptions no longer accepts a direct client
+// update at all) the only way this transition can happen client-side.
+export async function checkAndUpdateSubscriptionStatus() {
+  const { error } = await supabase.rpc('update_rider_subscription_statuses')
   if (error) throw error
-
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-
-  for (const row of rows ?? []) {
-    const expiry = new Date(row.expiry_date)
-    const graceEnd = new Date(expiry); graceEnd.setDate(graceEnd.getDate() + GRACE_PERIOD_DAYS)
-
-    let nextStatus = row.status
-    if (row.status === 'active' && today > expiry) nextStatus = today > graceEnd ? 'expired' : 'grace_period'
-    else if (row.status === 'grace_period' && today > graceEnd) nextStatus = 'expired'
-
-    if (nextStatus !== row.status) {
-      await supabase.from('rider_subscriptions').update({ status: nextStatus }).eq('id', row.id)
-    }
-  }
 }
 
 export async function fetchCurrentSubscription(riderId) {
@@ -85,109 +70,50 @@ async function notifyRider(riderId, { title, body }) {
   if (error) console.error('Failed to send subscription notification:', error)
 }
 
+// The fraud check, expiry math, and write all now happen inside
+// activate_rider_subscription (schema.sql) — rider_subscriptions no
+// longer accepts a direct client insert/update at all (see
+// SUBSCRIPTION PURCHASE INTEGRITY in schema.sql), since a raw insert
+// let any rider set status/expiry_date to whatever they wanted,
+// self-granting Family for free. planId/upiReference are user input
+// here, not assumed-correct state — the RPC re-derives everything else.
 export async function activateSubscription({ riderId, planId, upiReference }) {
   const ref = upiReference.trim()
   if (!ref) throw new Error('Enter the UPI transaction reference to confirm payment.')
 
-  const { data: existing } = await supabase
-    .from('rider_subscriptions')
-    .select('id')
-    .eq('payment_reference', ref)
-    .maybeSingle()
-  if (existing) throw new Error('This payment reference has already been used. Please check your UPI reference.')
-
-  const { data: plan, error: planError } = await supabase
-    .from('rider_subscription_plans')
-    .select('*')
-    .eq('id', planId)
-    .single()
-  if (planError) throw planError
-
-  const start = new Date()
-  const expiry = new Date(start)
-  expiry.setDate(expiry.getDate() + plan.duration_days)
-
-  // A rider can't hold two simultaneously-active plans — same one-
-  // current-row-at-a-time rule as driver subscriptions.
-  await supabase
-    .from('rider_subscriptions')
-    .update({ status: 'cancelled' })
-    .eq('rider_id', riderId)
-    .in('status', ['active', 'grace_period'])
-
-  const { data, error } = await supabase
-    .from('rider_subscriptions')
-    .insert({
-      rider_id: riderId,
-      plan_id: planId,
-      status: 'active',
-      start_date: toLocalDateString(start),
-      expiry_date: toLocalDateString(expiry),
-      payment_method: 'upi',
-      payment_reference: ref,
-      paid_at: new Date().toISOString(),
-    })
-    .select()
-    .single()
+  const { data, error } = await supabase.rpc('activate_rider_subscription', {
+    p_rider_id: riderId, p_plan_id: planId, p_payment_reference: ref,
+  })
   if (error) throw error
 
+  const { data: plan } = await supabase.from('rider_subscription_plans').select('name').eq('id', planId).single()
   await notifyRider(riderId, {
     title: 'Subscription activated',
-    body: `Your ${plan.name.charAt(0).toUpperCase() + plan.name.slice(1)} plan is now active until ${expiry.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
+    body: `Your ${plan?.name ? plan.name.charAt(0).toUpperCase() + plan.name.slice(1) : 'new'} plan is now active until ${new Date(data.expiry_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
   })
 
   return data
 }
 
 // Renewal chains off the old expiry if still active, so paid-for days
-// are never lost — same logic as driver subscriptions' renewSubscription.
-export async function renewSubscription({ riderId, currentSubscription, planId, upiReference }) {
+// are never lost — computed server-side by renew_rider_subscription
+// (schema.sql), which re-derives "the current subscription" itself
+// rather than trusting the caller's currentSubscription (kept as a
+// param only so the UI can decide whether to show "Renew" at all; it's
+// never sent to the RPC). Same logic as driver subscriptions.
+export async function renewSubscription({ riderId, planId, upiReference }) {
   const ref = upiReference.trim()
   if (!ref) throw new Error('Enter the UPI transaction reference to confirm payment.')
 
-  const { data: existing } = await supabase
-    .from('rider_subscriptions')
-    .select('id')
-    .eq('payment_reference', ref)
-    .maybeSingle()
-  if (existing) throw new Error('This payment reference has already been used. Please check your UPI reference.')
-
-  const { data: plan, error: planError } = await supabase
-    .from('rider_subscription_plans')
-    .select('*')
-    .eq('id', planId)
-    .single()
-  if (planError) throw planError
-
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  const stillActive = currentSubscription?.status === 'active' && new Date(currentSubscription.expiry_date) >= today
-  const start = stillActive ? new Date(currentSubscription.expiry_date) : today
-  const expiry = new Date(start)
-  expiry.setDate(expiry.getDate() + plan.duration_days)
-
-  if (currentSubscription?.id) {
-    await supabase.from('rider_subscriptions').update({ status: 'cancelled' }).eq('id', currentSubscription.id)
-  }
-
-  const { data, error } = await supabase
-    .from('rider_subscriptions')
-    .insert({
-      rider_id: riderId,
-      plan_id: planId,
-      status: 'active',
-      start_date: toLocalDateString(start),
-      expiry_date: toLocalDateString(expiry),
-      payment_method: 'upi',
-      payment_reference: ref,
-      paid_at: new Date().toISOString(),
-    })
-    .select()
-    .single()
+  const { data, error } = await supabase.rpc('renew_rider_subscription', {
+    p_rider_id: riderId, p_plan_id: planId, p_payment_reference: ref,
+  })
   if (error) throw error
 
+  const { data: plan } = await supabase.from('rider_subscription_plans').select('name').eq('id', planId).single()
   await notifyRider(riderId, {
     title: 'Subscription renewed',
-    body: `Your ${plan.name.charAt(0).toUpperCase() + plan.name.slice(1)} plan has been renewed until ${expiry.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
+    body: `Your ${plan?.name ? plan.name.charAt(0).toUpperCase() + plan.name.slice(1) : ''} plan has been renewed until ${new Date(data.expiry_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
   })
 
   return data
@@ -198,7 +124,7 @@ export async function renewSubscription({ riderId, currentSubscription, planId, 
 // active/grace_period. Replaces the old flat users.subscription_tier
 // read, which nothing ever wrote to from the rider side.
 export async function fetchEffectiveTier(riderId) {
-  await checkAndUpdateSubscriptionStatus(riderId)
+  await checkAndUpdateSubscriptionStatus()
   const current = await fetchCurrentSubscription(riderId)
   if (current && ['active', 'grace_period'].includes(current.status)) {
     return current.rider_subscription_plans?.name ?? 'none'

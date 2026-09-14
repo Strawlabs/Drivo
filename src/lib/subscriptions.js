@@ -27,35 +27,18 @@ export async function fetchPlans() {
 }
 
 /*
-  No backend cron exists in this app (same constraint as Go Home Mode,
-  scheduled rides). Expiry/grace-period transitions are computed here,
-  client-side, anchored to real dates — active -> grace_period once
-  expiry_date has passed, grace_period -> expired once
-  GRACE_PERIOD_DAYS past that. Called on load before reading status
-  anywhere so displayed/enforced status is never stale.
+  A real pg_cron job (update_driver_subscription_statuses, see
+  schema.sql) already runs this exact active -> grace_period -> expired
+  transition once a day platform-wide. This just calls the same
+  security-definer function on demand so a driver who opens the app
+  mid-day sees a freshly-correct status instead of waiting for the next
+  cron tick — not a second, divergent implementation of the same rule,
+  and (since driver_subscriptions no longer accepts a direct client
+  update at all) the only way this transition can happen client-side.
 */
-export async function checkAndUpdateSubscriptionStatus(driverId) {
-  const { data: rows, error } = await supabase
-    .from('driver_subscriptions')
-    .select('id, status, expiry_date')
-    .eq('driver_id', driverId)
-    .in('status', ['active', 'grace_period'])
+export async function checkAndUpdateSubscriptionStatus() {
+  const { error } = await supabase.rpc('update_driver_subscription_statuses')
   if (error) throw error
-
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-
-  for (const row of rows ?? []) {
-    const expiry = new Date(row.expiry_date)
-    const graceEnd = new Date(expiry); graceEnd.setDate(graceEnd.getDate() + GRACE_PERIOD_DAYS)
-
-    let nextStatus = row.status
-    if (row.status === 'active' && today > expiry) nextStatus = today > graceEnd ? 'expired' : 'grace_period'
-    else if (row.status === 'grace_period' && today > graceEnd) nextStatus = 'expired'
-
-    if (nextStatus !== row.status) {
-      await supabase.from('driver_subscriptions').update({ status: nextStatus }).eq('id', row.id)
-    }
-  }
 }
 
 /*
@@ -125,62 +108,30 @@ export async function hasQualifyingTier(driverId) {
 
 /*
   Self-reported UPI confirmation, mirroring the ride-payment pattern in
-  src/lib/payments.js: same duplicate-reference fraud check, since
-  there's no real payment gateway callback for this MVP. Unlike ride
-  payments, no 'pending' row is written until the reference is actually
-  confirmed — a subscription purchase is a short, single-user flow, not
-  something that needs to survive being abandoned mid-payment.
+  src/lib/payments.js: same duplicate-reference fraud check — except the
+  check, the expiry math, and the write all now happen inside
+  activate_driver_subscription (schema.sql), not here. This table no
+  longer accepts a direct client insert/update at all (see
+  SUBSCRIPTION PURCHASE INTEGRITY in schema.sql): a raw insert let any
+  driver set status/expiry_date to whatever they wanted, self-granting
+  Elite for free. The RPC re-derives everything server-side instead of
+  trusting these arguments for anything but "which plan, which
+  reference" — planId/upiReference are effectively user input, not
+  assumed-correct state.
 */
 export async function activateSubscription({ driverId, planId, upiReference }) {
   const ref = upiReference.trim()
   if (!ref) throw new Error('Enter the UPI transaction reference to confirm payment.')
 
-  const { data: existing } = await supabase
-    .from('driver_subscriptions')
-    .select('id')
-    .eq('payment_reference', ref)
-    .maybeSingle()
-  if (existing) throw new Error('This payment reference has already been used. Please check your UPI reference.')
-
-  const { data: plan, error: planError } = await supabase
-    .from('subscription_plans')
-    .select('*')
-    .eq('id', planId)
-    .single()
-  if (planError) throw planError
-
-  const start = new Date()
-  const expiry = new Date(start)
-  expiry.setDate(expiry.getDate() + plan.duration_days)
-
-  // Switching plans replaces whatever's currently active/lapsed — a driver
-  // can't hold two simultaneously-active plans (would double-count in
-  // admin subscriber totals and make "current plan" display ambiguous).
-  await supabase
-    .from('driver_subscriptions')
-    .update({ status: 'cancelled' })
-    .eq('driver_id', driverId)
-    .in('status', ['active', 'grace_period'])
-
-  const { data, error } = await supabase
-    .from('driver_subscriptions')
-    .insert({
-      driver_id: driverId,
-      plan_id: planId,
-      status: 'active',
-      start_date: toLocalDateString(start),
-      expiry_date: toLocalDateString(expiry),
-      payment_method: 'upi',
-      payment_reference: ref,
-      paid_at: new Date().toISOString(),
-    })
-    .select()
-    .single()
+  const { data, error } = await supabase.rpc('activate_driver_subscription', {
+    p_driver_id: driverId, p_plan_id: planId, p_payment_reference: ref,
+  })
   if (error) throw error
 
+  const { data: plan } = await supabase.from('subscription_plans').select('name').eq('id', planId).single()
   await notifyDriver(driverId, {
     title: 'Subscription activated',
-    body: `Your ${plan.name.charAt(0).toUpperCase() + plan.name.slice(1)} plan is now active until ${expiry.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
+    body: `Your ${plan?.name ? plan.name.charAt(0).toUpperCase() + plan.name.slice(1) : 'new'} plan is now active until ${new Date(data.expiry_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
   })
 
   return data
@@ -191,58 +142,25 @@ export async function activateSubscription({ driverId, planId, upiReference }) {
   subscription is still within its paid period, the new expiry chains
   off the OLD expiry date rather than today, so the driver never loses
   already-paid-for days. If it's already lapsed (grace_period/expired),
-  the new period starts from today instead.
+  the new period starts from today instead — computed server-side by
+  renew_driver_subscription (schema.sql), which re-derives "the current
+  subscription" itself rather than trusting the caller's
+  currentSubscription (kept as a param only so the UI can decide
+  whether to show "Renew" at all; it's never sent to the RPC).
 */
-export async function renewSubscription({ driverId, currentSubscription, planId, upiReference }) {
+export async function renewSubscription({ driverId, planId, upiReference }) {
   const ref = upiReference.trim()
   if (!ref) throw new Error('Enter the UPI transaction reference to confirm payment.')
 
-  const { data: existing } = await supabase
-    .from('driver_subscriptions')
-    .select('id')
-    .eq('payment_reference', ref)
-    .maybeSingle()
-  if (existing) throw new Error('This payment reference has already been used. Please check your UPI reference.')
-
-  const { data: plan, error: planError } = await supabase
-    .from('subscription_plans')
-    .select('*')
-    .eq('id', planId)
-    .single()
-  if (planError) throw planError
-
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  const stillActive = currentSubscription?.status === 'active' && new Date(currentSubscription.expiry_date) >= today
-  const start = stillActive ? new Date(currentSubscription.expiry_date) : today
-  const expiry = new Date(start)
-  expiry.setDate(expiry.getDate() + plan.duration_days)
-
-  // Close out the row being renewed so it doesn't linger as a second
-  // "active"/"grace_period" row alongside the new one (same fix as
-  // activateSubscription — one current row per driver at a time).
-  if (currentSubscription?.id) {
-    await supabase.from('driver_subscriptions').update({ status: 'cancelled' }).eq('id', currentSubscription.id)
-  }
-
-  const { data, error } = await supabase
-    .from('driver_subscriptions')
-    .insert({
-      driver_id: driverId,
-      plan_id: planId,
-      status: 'active',
-      start_date: toLocalDateString(start),
-      expiry_date: toLocalDateString(expiry),
-      payment_method: 'upi',
-      payment_reference: ref,
-      paid_at: new Date().toISOString(),
-    })
-    .select()
-    .single()
+  const { data, error } = await supabase.rpc('renew_driver_subscription', {
+    p_driver_id: driverId, p_plan_id: planId, p_payment_reference: ref,
+  })
   if (error) throw error
 
+  const { data: plan } = await supabase.from('subscription_plans').select('name').eq('id', planId).single()
   await notifyDriver(driverId, {
     title: 'Subscription renewed',
-    body: `Your ${plan.name.charAt(0).toUpperCase() + plan.name.slice(1)} plan has been renewed until ${expiry.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
+    body: `Your ${plan?.name ? plan.name.charAt(0).toUpperCase() + plan.name.slice(1) : ''} plan has been renewed until ${new Date(data.expiry_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
   })
 
   return data

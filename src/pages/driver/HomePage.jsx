@@ -790,10 +790,11 @@ export default function DriverHomePage() {
   }, [driverProfileId])
 
   // Subscription status — most recent active/grace_period plan, if any.
-  // Transitions expired dates first (no backend cron) so this never shows stale "active".
+  // Transitions expired dates first (via the same pg_cron-scheduled
+  // function, called on demand) so this never shows stale "active".
   useEffect(() => {
     if (!driverProfileId) return
-    checkAndUpdateSubscriptionStatus(driverProfileId).finally(() => {
+    checkAndUpdateSubscriptionStatus().finally(() => {
       supabase
         .from('driver_subscriptions')
         .select('status, expiry_date, subscription_plans(name)')
@@ -818,9 +819,10 @@ export default function DriverHomePage() {
     return () => supabase.removeChannel(channel)
   }, [driverProfileId])
 
-  // Go Home Mode — load any active session, and auto-expire it client-side
-  // once end_time passes (no backend cron for this, same as the UPI
-  // payment timeout).
+  // Go Home Mode — load any active session, and auto-expire it locally
+  // once end_time passes too, so the UI updates the instant it lapses
+  // rather than waiting for the next expire_stale_go_home_sessions
+  // cron tick (schema.sql) to catch up.
   useEffect(() => {
     if (!driverProfileId) return
     fetchActiveGoHomeSession(driverProfileId).then(setGoHomeSession)

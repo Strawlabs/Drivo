@@ -244,11 +244,11 @@ export async function cancelScheduledRide(id, reason = 'Cancelled by user') {
 }
 
 /*
-  No backend cron exists in this app — every scheduled/timed feature
-  here (Go Home Mode, UPI timeout) is dispatched client-side, anchored
-  to a real DB timestamp so it still works correctly after a reload.
-  This only fires while the rider has the app open at/after the
-  scheduled time; it does not fire in the background.
+  dispatch_due_scheduled_rides (schema.sql) already runs this
+  server-side on a cron tick, so a due ride gets dispatched even if the
+  rider's app is closed. This client-side pass just gives the rider
+  instant feedback if they happen to have the app open right at the
+  scheduled time, rather than waiting up to a minute for the next tick.
 */
 export async function dispatchDueScheduledRides(userId) {
   const nowIso = new Date().toISOString()

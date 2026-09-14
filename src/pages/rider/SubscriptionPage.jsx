@@ -119,7 +119,7 @@ export default function RiderSubscriptionPage() {
   const [failedWarning, setFailedWarning] = useState(false)
 
   const load = useCallback(async (riderId) => {
-    await checkAndUpdateSubscriptionStatus(riderId)
+    await checkAndUpdateSubscriptionStatus()
     const [p, c, h] = await Promise.all([
       fetchPlans(),
       fetchCurrentSubscription(riderId),
@@ -150,7 +150,7 @@ export default function RiderSubscriptionPage() {
     setPanelError('')
     try {
       if (panel.mode === 'renew') {
-        await renewSubscription({ riderId: user.id, currentSubscription: current, planId: panel.plan.id, upiReference: upiRef })
+        await renewSubscription({ riderId: user.id, planId: panel.plan.id, upiReference: upiRef })
       } else {
         await activateSubscription({ riderId: user.id, planId: panel.plan.id, upiReference: upiRef })
       }

@@ -798,11 +798,10 @@ export default function RiderHomePage() {
   }, [user])
 
   /*
-    No backend cron exists in this app. While the rider has the app
-    open, periodically check for scheduled_rides whose time has
-    arrived and dispatch them into real rides — matches the pattern
-    already used for Go Home Mode / UPI timeout (client-anchored,
-    survives reload, but only fires while a client is actually open).
+    dispatch_due_scheduled_rides (schema.sql) already handles this
+    server-side on a cron tick regardless of whether the app is open.
+    This just re-checks while the rider has the app open, so a ride
+    due right now doesn't wait for the next tick to appear.
   */
   useEffect(() => {
     if (!user) return
