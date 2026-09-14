@@ -276,27 +276,13 @@ export default function ActiveRidePage() {
     if (cancelling) return
     setCancelling(true)
     if (rideId) {
-      await supabase.from('rides').update({
-        status: 'cancelled',
-        cancellation_reason: 'Cancelled by rider',
-        cancelled_by: user?.id ?? null,
-      }).eq('id', rideId)
-
-      // Only the DB row was updated above — without this, a driver who
-      // already accepted has no way to find out and their screen keeps
-      // showing the ride as active indefinitely (their realtime
-      // subscription only fires on rows *assigned* to them; a plain
-      // status update alone still reaches them via postgres_changes,
-      // but the notification gives them an explicit heads-up too).
-      const assignedDriverId = driverRef.current?.id
-      if (assignedDriverId) {
-        notifyDriverProfile(assignedDriverId, {
-          category: 'ride_alert',
-          title: 'Ride cancelled',
-          body: `The rider cancelled the trip to ${destination}.`,
-          data: { rideId },
-        }).catch(() => {})
-      }
+      // Routed through cancel_ride (schema.sql) — rides' UPDATE policy is
+      // admin-only now, so a plain client update no longer reaches this
+      // table at all. The RPC also sends the driver notification itself
+      // (guaranteed to fire in the same transaction as the cancellation,
+      // rather than a separate client-side call that could fail silently
+      // after the main update already succeeded).
+      await supabase.rpc('cancel_ride', { p_ride_id: rideId, p_reason: 'Cancelled by rider' })
     }
     navigate('/rider/home', { replace: true })
   }

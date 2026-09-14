@@ -851,20 +851,23 @@ export default function DriverHomePage() {
   // backdated offered_at, which the next cron tick treats as a stale
   // offer and reassigns) so the next candidate gets a shot. Only a direct
   // booking (a rider picked this driver by name) actually expires, since
-  // there's no pool to fall back into.
+  // there's no pool to fall back into. Routed through reject_or_expire_ride
+  // (schema.sql) since rides' UPDATE policy is admin-only now — every real
+  // transition on this table goes through a security-definer function
+  // that re-checks ownership/state server-side instead of trusting a
+  // plain client update.
   async function releaseOrExpire(ride) {
-    if (ride.dispatch_mode === 'auto') {
-      await supabase.from('rides').update({ offered_at: new Date(Date.now() - 31000).toISOString() })
-        .eq('id', ride.id).eq('driver_id', driverProfileId).eq('status', 'requested')
-    } else {
-      await supabase.from('rides').update({ status: 'expired' }).eq('id', ride.id)
-    }
+    await supabase.rpc('reject_or_expire_ride', { p_ride_id: ride.id, p_driver_id: driverProfileId })
   }
 
   async function handleAcceptRide() {
     const request = rideQueue[0]
     if (!request || !driverProfileId) return
     const ride = request.ride
+
+    // accept_ride itself now also refuses if I'm already on an
+    // accepted/active ride (enforced server-side, not just here) — this
+    // pre-check just avoids burning the offer on a doomed call.
     const { data: existing } = await supabase
       .from('rides')
       .select('id')
@@ -877,17 +880,13 @@ export default function DriverHomePage() {
       return
     }
 
-    // Guarded update — only succeeds if this ride is still actually
-    // offered to me. dispatch_pending_rides' 30s timeout sweep could have
-    // reassigned it to someone else a moment before this tap landed.
-    const { data: accepted, error } = await supabase
-      .from('rides')
-      .update({ status: 'accepted', accepted_at: new Date().toISOString() })
-      .eq('id', ride.id)
-      .eq('driver_id', driverProfileId)
-      .eq('status', 'requested')
-      .select()
-      .maybeSingle()
+    // accept_ride only succeeds if this ride is still actually offered to
+    // me — dispatch_pending_rides' 30s timeout sweep could have reassigned
+    // it to someone else a moment before this tap landed, in which case it
+    // returns null rather than erroring.
+    const { data: accepted, error } = await supabase.rpc('accept_ride', {
+      p_ride_id: ride.id, p_driver_id: driverProfileId,
+    })
 
     if (error || !accepted) {
       alert('Sorry — this ride was just given to another driver.')
@@ -906,25 +905,19 @@ export default function DriverHomePage() {
 
   async function handleStartRide() {
     if (!activeRide) return
-    const startedAt = new Date().toISOString()
-    await supabase.from('rides').update({ status: 'active', started_at: startedAt }).eq('id', activeRide.id)
-    setActiveRide(r => ({ ...r, status: 'active', started_at: startedAt }))
+    const { data, error } = await supabase.rpc('start_ride', { p_ride_id: activeRide.id })
+    if (error) return
+    setActiveRide(data)
   }
 
   async function handleCompleteRide() {
     if (!activeRide) return
-    const completedAt = new Date()
-    const startedAt = activeRide.started_at ? new Date(activeRide.started_at) : completedAt
-    const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000))
-    // No live GPS tracking yet — approximate distance from elapsed time at typical city driving speed.
-    const distanceKm = Math.round((durationMinutes / 60) * 20 * 10) / 10
-    await supabase.from('rides').update({
-      status: 'completed',
-      completed_at: completedAt.toISOString(),
-      final_fare: activeRide.estimated_fare,
-      duration_minutes: durationMinutes,
-      distance_km: distanceKm,
-    }).eq('id', activeRide.id)
+    // Duration/distance/final_fare are now computed server-side inside
+    // complete_ride (schema.sql) — same approximation as before (elapsed
+    // time at a typical city driving speed, no live GPS tracking yet),
+    // just no longer trusting the client to report its own numbers.
+    const { error } = await supabase.rpc('complete_ride', { p_ride_id: activeRide.id })
+    if (error) return
     setActiveRide(null)
   }
 
