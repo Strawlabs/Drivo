@@ -281,6 +281,22 @@ export default function ActiveRidePage() {
         cancellation_reason: 'Cancelled by rider',
         cancelled_by: user?.id ?? null,
       }).eq('id', rideId)
+
+      // Only the DB row was updated above — without this, a driver who
+      // already accepted has no way to find out and their screen keeps
+      // showing the ride as active indefinitely (their realtime
+      // subscription only fires on rows *assigned* to them; a plain
+      // status update alone still reaches them via postgres_changes,
+      // but the notification gives them an explicit heads-up too).
+      const assignedDriverId = driverRef.current?.id
+      if (assignedDriverId) {
+        notifyDriverProfile(assignedDriverId, {
+          category: 'ride_alert',
+          title: 'Ride cancelled',
+          body: `The rider cancelled the trip to ${destination}.`,
+          data: { rideId },
+        }).catch(() => {})
+      }
     }
     navigate('/rider/home', { replace: true })
   }

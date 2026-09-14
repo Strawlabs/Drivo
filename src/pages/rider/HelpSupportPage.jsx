@@ -1,5 +1,17 @@
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useAuth } from '@/hooks/useAuth.jsx'
+import { submitIncidentReport } from '@/lib/safety'
+
+// Mirrors incident_reports.category's check constraint (schema.sql) —
+// 'other' covers anything that isn't one of the specific DB categories.
+const TICKET_CATEGORIES = [
+  { id: 'safety',           label: 'Safety' },
+  { id: 'payment',          label: 'Payments' },
+  { id: 'driver_behavior',  label: 'Driver behavior' },
+  { id: 'vehicle',          label: 'Vehicle / EV' },
+  { id: 'other',            label: 'Something else' },
+]
 
 const CATEGORIES = [
   { id: 'safety',   label: 'Safety',      icon: 'shield',           color: '#B91C1C', bg: 'rgba(185,28,28,0.1)' },
@@ -30,9 +42,38 @@ function ChevronIcon({ open }) {
 
 export default function HelpSupportPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState(null)
   const [openFaqId, setOpenFaqId] = useState(null)
+
+  const [ticketOpen, setTicketOpen] = useState(false)
+  const [ticketCategory, setTicketCategory] = useState('other')
+  const [ticketDescription, setTicketDescription] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState(null)
+  const [submitted, setSubmitted] = useState(false)
+
+  async function handleSubmitTicket(e) {
+    e.preventDefault()
+    if (!user || !ticketDescription.trim() || submitting) return
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      await submitIncidentReport({
+        rideId: null,
+        reportedBy: user.id,
+        category: ticketCategory,
+        description: ticketDescription.trim(),
+      })
+      setSubmitted(true)
+      setTicketDescription('')
+    } catch (err) {
+      setSubmitError(err.message ?? 'Could not send your message. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   const filteredFaqs = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -123,9 +164,69 @@ export default function HelpSupportPage() {
           })}
         </div>
 
+        {/* Contact Support — a real ticket, not just a mailto: link. Question
+            not covered by the FAQs above lands in incident_reports (same
+            table/admin queue as ride-specific reports) with ride_id null,
+            so it's actually tracked instead of disappearing into an inbox
+            nobody in this app can see. */}
+        <h3 style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 12 }}>Still need help?</h3>
+        <div style={{ background: 'white', borderRadius: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', padding: 16, marginBottom: 16 }}>
+          {submitted ? (
+            <div style={{ textAlign: 'center', padding: '12px 0' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 32, color: 'var(--color-primary)' }}>check_circle</span>
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)', marginTop: 8 }}>Message sent</p>
+              <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginTop: 4 }}>Our support team will follow up soon.</p>
+              <button onClick={() => setSubmitted(false)} style={{ marginTop: 12, background: 'none', border: 'none', color: 'var(--color-primary)', fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+                Send another message
+              </button>
+            </div>
+          ) : !ticketOpen ? (
+            <button onClick={() => setTicketOpen(true)}
+              className="w-full flex items-center justify-between"
+              style={{ background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', padding: 0, color: 'var(--color-on-surface)' }}>
+              <div>
+                <p style={{ fontSize: 14, fontWeight: 600 }}>Contact Support</p>
+                <p style={{ fontSize: 13, color: 'var(--color-secondary)', marginTop: 2 }}>Didn't find your answer above? Send us a message.</p>
+              </div>
+              <span className="material-symbols-outlined">chevron_right</span>
+            </button>
+          ) : (
+            <form onSubmit={handleSubmitTicket} className="flex flex-col gap-3">
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)' }}>Contact Support</p>
+              <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
+                {TICKET_CATEGORIES.map(c => (
+                  <button key={c.id} type="button" onClick={() => setTicketCategory(c.id)}
+                    style={{ padding: '6px 12px', borderRadius: 9999, border: `1px solid ${ticketCategory === c.id ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: ticketCategory === c.id ? 'rgba(0,109,55,0.08)' : 'white', color: ticketCategory === c.id ? 'var(--color-primary)' : 'var(--color-on-surface)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                value={ticketDescription}
+                onChange={e => setTicketDescription(e.target.value)}
+                placeholder="Tell us what's going on…"
+                rows={4}
+                required
+                style={{ width: '100%', padding: 12, borderRadius: 10, border: '1px solid var(--color-outline-variant)', fontSize: 14, color: 'var(--color-on-surface)', fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }}
+              />
+              {submitError && <p style={{ fontSize: 12, color: 'var(--color-error)' }}>{submitError}</p>}
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setTicketOpen(false)} disabled={submitting}
+                  style={{ flex: 1, height: 44, background: 'var(--color-surface-container-low)', color: 'var(--color-on-surface)', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+                  Cancel
+                </button>
+                <button type="submit" disabled={submitting || !ticketDescription.trim()}
+                  style={{ flex: 2, height: 44, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer', opacity: submitting || !ticketDescription.trim() ? 0.6 : 1 }}>
+                  {submitting ? 'Sending…' : 'Send Message'}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+
         {/* Contact options */}
         <div className="flex gap-3">
-          <a href="mailto:support@drivo.app" style={{ flex: 1, height: 48, background: 'var(--color-primary)', color: 'white', borderRadius: 12, fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, textDecoration: 'none' }}>
+          <a href="mailto:support@drivo.app" style={{ flex: 1, height: 48, background: 'var(--color-surface-container-low)', color: 'var(--color-on-surface)', borderRadius: 12, fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, textDecoration: 'none' }}>
             <span className="material-symbols-outlined" style={{ fontSize: 18 }}>mail</span>
             Email Support
           </a>

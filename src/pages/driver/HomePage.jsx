@@ -683,6 +683,21 @@ export default function DriverHomePage() {
     if (!driverProfileId || !isOnline) return
 
     async function handleIncomingRide(ride) {
+      // A rider cancelling reaches this driver as an UPDATE on the same
+      // row (driver_id unchanged, status -> 'cancelled') since the filter
+      // above is on driver_id, not status. Without this, an accepted
+      // ride the rider then cancels never clears activeRide, and the
+      // driver's screen is stuck showing "Ride Accepted"/"En Route"
+      // forever with no way to know the rider bailed.
+      if (ride.status === 'cancelled') {
+        setActiveRide(current => {
+          if (current?.id !== ride.id) return current
+          alert('The rider cancelled this ride.')
+          return null
+        })
+        setRideQueue(q => q.filter(item => item.ride.id !== ride.id))
+        return
+      }
       if (ride.status !== 'requested') return
 
       if (goHomeSession) {
@@ -716,6 +731,15 @@ export default function DriverHomePage() {
     // moves on to the next candidate (confirmed happening in testing).
     supabase.from('rides').select('*').eq('driver_id', driverProfileId).eq('status', 'requested')
       .then(({ data }) => (data ?? []).forEach(handleIncomingRide))
+
+    // Same problem, one step later: a driver who refreshes (or reopens the
+    // app) mid-trip previously lost the active-ride panel entirely — it
+    // only ever got set client-side inside handleAcceptRide, so a reload
+    // left an accepted/active ride stranded with no Start/Complete button
+    // and no way back to it short of editing the DB by hand.
+    supabase.from('rides').select('*').eq('driver_id', driverProfileId).in('status', ['accepted', 'active'])
+      .limit(1).maybeSingle()
+      .then(({ data }) => { if (data) setActiveRide(data) })
 
     const channel = supabase
       .channel('driver-rides-' + driverProfileId)
