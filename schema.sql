@@ -2103,6 +2103,21 @@ select cron.schedule('dispatch-pending-rides', '* * * * *', $$select public.disp
 -- admin dashboard was a rubber stamp with nothing behind it. Files are
 -- stored as "<user_id>/<doc_id>.<ext>", so storage.foldername(name)[1]
 -- is the owning driver's own auth uid — that's the whole access rule.
+--
+-- Also found live during the security audit pass (pg_policies on
+-- storage.objects, checked because rides had just turned up the same
+-- shape of surprise): a policy named "Allow authenticated uploads"
+-- (ALL, qual/with_check = bucket_id = 'kyc-documents' only — no folder
+-- check at all) predating the three below and never captured anywhere
+-- in this file. It silently granted any authenticated user full read/
+-- write/delete on every driver's KYC documents — Aadhar, PAN, license,
+-- EV certification scans. Dropped immediately; verified the fix with a
+-- synthetic text blob into another driver's folder (rejected) and into
+-- the tester's own folder (accepted, then deleted) — never listing or
+-- reading any real document, since this bucket holds real personal ID
+-- data and the earlier KYC review work already established that
+-- boundary.
+drop policy if exists "Allow authenticated uploads" on storage.objects;
 create policy "kyc_documents_insert_own"
   on storage.objects for insert
   with check (
