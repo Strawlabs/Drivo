@@ -924,8 +924,11 @@ export default function DriverHomePage() {
   async function handleToggleOnline() {
     setToggling(true)
     const next = !isOnline
-    if (user) {
-      const { error } = await supabase.from('driver_profiles').update({ is_online: next }).eq('user_id', user.id)
+    if (driverProfileId) {
+      // Routed through set_driver_online_status (schema.sql) — driver_profiles'
+      // UPDATE policy is admin-only now, so a plain client update no longer
+      // reaches this table at all.
+      const { error } = await supabase.rpc('set_driver_online_status', { p_driver_id: driverProfileId, p_is_online: next })
       if (!error) setIsOnline(next)
     } else {
       setIsOnline(next)

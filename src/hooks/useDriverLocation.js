@@ -36,10 +36,11 @@ export function useDriverLocation({ driverProfileId, active }) {
         const now = Date.now()
         if (now - lastWriteRef.current < WRITE_THROTTLE_MS) return
         lastWriteRef.current = now
+        // Routed through update_driver_location (schema.sql) — driver_profiles'
+        // UPDATE policy is admin-only now, so a plain client update no
+        // longer reaches this table at all.
         supabase
-          .from('driver_profiles')
-          .update({ current_latitude: next.lat, current_longitude: next.lng })
-          .eq('id', driverProfileId)
+          .rpc('update_driver_location', { p_driver_id: driverProfileId, p_lat: next.lat, p_lng: next.lng })
           .then(({ error: writeErr }) => {
             if (writeErr) console.error('Failed to broadcast driver location:', writeErr.message)
           })

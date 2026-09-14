@@ -181,21 +181,19 @@ export async function fetchDriverProfile(driverId) {
   Called after a rider submits a review so the reputation score
   actually reflects submitted reviews (there's no DB trigger for this).
 */
+/*
+  The actual averaging + write now happens inside recalculate_driver_rating
+  (schema.sql) — this used to write directly to driver_profiles, but that
+  table's UPDATE policy only ever allowed the owning driver or an admin,
+  never the rider who just submitted the review that triggers this call.
+  The result: every call from this (the only call site) silently affected
+  zero rows — no error, since RLS just filters non-matching rows on
+  UPDATE — so driver ratings had been frozen since that policy existed.
+  Confirmed live during an end-to-end regression pass. The RPC is safe to
+  leave open to any authenticated caller since it only recomputes from
+  real ride_ratings rows, never from caller-supplied numbers.
+*/
 export async function recalculateDriverRating(driverId) {
-  const { data, error } = await supabase
-    .from('ride_ratings')
-    .select('rating')
-    .eq('driver_id', driverId)
+  const { error } = await supabase.rpc('recalculate_driver_rating', { p_driver_id: driverId })
   if (error) throw error
-
-  const ratings = data ?? []
-  if (ratings.length === 0) return
-
-  const average = ratings.reduce((sum, r) => sum + r.rating, 0) / ratings.length
-
-  const { error: updateErr } = await supabase
-    .from('driver_profiles')
-    .update({ rating: Math.round(average * 100) / 100, total_rides: ratings.length })
-    .eq('id', driverId)
-  if (updateErr) throw updateErr
 }
