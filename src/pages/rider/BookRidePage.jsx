@@ -141,6 +141,15 @@ export default function BookRidePage() {
         driver_id: chosenDriver?.id ?? null,
         vehicle_id: chosenDriver?.vehicleId ?? null,
         dispatch_mode: chosenDriver ? 'direct' : 'auto',
+        // Both selectable tiers (Luxe/EV Sedan, Space/EV SUV) are car body
+        // styles — vehicles.vehicle_type only has 'ev_auto'/'ev_car', and
+        // this was never set at all before, so auto-dispatch's own vehicle-
+        // type filter (dispatch_pending_rides, schema.sql) was silently a
+        // no-op: a rider who picked and was quoted for a car could still
+        // get matched with an EV-Auto (rickshaw) driver. A direct booking
+        // doesn't need this — the rider already picked that driver's real
+        // vehicle by choosing them.
+        requested_vehicle_type: chosenDriver ? null : 'ev_car',
         pickup_address: pickup.address,
         pickup_latitude: pickup.lat,
         pickup_longitude: pickup.lng,
