@@ -133,14 +133,16 @@ function SubscriptionAdminPanel() {
 
   async function updatePrice(planId, price) {
     setSavingId(planId)
-    await supabase.from('subscription_plans').update({ price }).eq('id', planId)
+    const { error } = await supabase.from('subscription_plans').update({ price }).eq('id', planId)
+    if (error) alert('Could not update price: ' + error.message)
     await load()
     setSavingId(null)
   }
 
   async function toggleActive(plan) {
     setSavingId(plan.id)
-    await supabase.from('subscription_plans').update({ is_active: !plan.is_active }).eq('id', plan.id)
+    const { error } = await supabase.from('subscription_plans').update({ is_active: !plan.is_active }).eq('id', plan.id)
+    if (error) alert('Could not update plan: ' + error.message)
     await load()
     setSavingId(null)
   }
@@ -253,14 +255,16 @@ function PricingAdminPanel() {
 
   async function updateTier(tier, field, value) {
     setSavingKey(tier + field)
-    await supabase.from('fare_tiers').update({ [field]: value, updated_at: new Date().toISOString() }).eq('tier', tier)
+    const { error } = await supabase.from('fare_tiers').update({ [field]: value, updated_at: new Date().toISOString() }).eq('tier', tier)
+    if (error) alert('Could not update pricing: ' + error.message)
     await load()
     setSavingKey(null)
   }
 
   async function updateSettings(field, value) {
     setSavingKey('settings' + field)
-    await supabase.from('fare_settings').update({ [field]: value, updated_at: new Date().toISOString() }).eq('id', 1)
+    const { error } = await supabase.from('fare_settings').update({ [field]: value, updated_at: new Date().toISOString() }).eq('id', 1)
+    if (error) alert('Could not update settings: ' + error.message)
     await load()
     setSavingKey(null)
   }
@@ -358,19 +362,21 @@ function SafetyAdminPanel() {
 
   async function updateStatus(id, status) {
     setSavingId(id)
-    await supabase.from('incident_reports').update({
+    const { error } = await supabase.from('incident_reports').update({
       status,
       resolution_notes: notesDraft[id] ?? null,
       reviewed_by: user?.id ?? null,
       updated_at: new Date().toISOString(),
     }).eq('id', id)
+    if (error) alert('Could not update report: ' + error.message)
     await load()
     setSavingId(null)
   }
 
   async function resolveSosEvent(id) {
     setSavingId(id)
-    await supabase.from('sos_events').update({ resolved_at: new Date().toISOString() }).eq('id', id)
+    const { error } = await supabase.from('sos_events').update({ resolved_at: new Date().toISOString() }).eq('id', id)
+    if (error) alert('Could not resolve SOS event: ' + error.message)
     await load()
     setSavingId(null)
   }
@@ -566,37 +572,61 @@ function AdsAdminPanel() {
 
   async function handleCreate() {
     if (!form.title.trim()) return
-    await createCampaign({
-      title: form.title.trim(),
-      description: form.description.trim(),
-      revenueSharePercent: Number(form.revenueSharePercent),
-      startDate: form.startDate,
-      endDate: form.endDate,
-    })
-    setForm({ title: '', description: '', revenueSharePercent: 10, startDate: '', endDate: '' })
-    setShowCreate(false)
-    await load()
+    try {
+      await createCampaign({
+        title: form.title.trim(),
+        description: form.description.trim(),
+        revenueSharePercent: Number(form.revenueSharePercent),
+        startDate: form.startDate,
+        endDate: form.endDate,
+      })
+      setForm({ title: '', description: '', revenueSharePercent: 10, startDate: '', endDate: '' })
+      setShowCreate(false)
+      await load()
+    } catch (err) {
+      alert('Could not create campaign: ' + err.message)
+    }
   }
 
   async function handleStatusChange(id, status) {
-    await updateCampaignStatus(id, status)
-    await load()
-    if (selectedCampaignId === id) await loadAssignments(id)
+    try {
+      await updateCampaignStatus(id, status)
+      await load()
+      if (selectedCampaignId === id) await loadAssignments(id)
+    } catch (err) {
+      alert('Could not update campaign: ' + err.message)
+    }
   }
 
   async function handleAssign(driverId) {
     if (!selectedCampaignId) return
-    await assignCampaignToDriver({ campaignId: selectedCampaignId, driverId })
-    await loadAssignments(selectedCampaignId)
-    await load()
+    // Assigning a driver to a campaign that's already run its course
+    // (completed/cancelled) or hasn't started (draft) makes no sense —
+    // they'd get notified about an offer that isn't really live.
+    const campaign = campaigns.find(c => c.id === selectedCampaignId)
+    if (campaign && campaign.status !== 'active') {
+      alert(`This campaign is ${campaign.status}, not active — assign drivers only to active campaigns.`)
+      return
+    }
+    try {
+      await assignCampaignToDriver({ campaignId: selectedCampaignId, driverId })
+      await loadAssignments(selectedCampaignId)
+      await load()
+    } catch (err) {
+      alert('Could not assign driver: ' + err.message)
+    }
   }
 
   async function handleComplete(assignmentId) {
     const amount = Number(creditDraft[assignmentId])
     if (!amount || amount <= 0) return
-    await completeAssignment(assignmentId, amount)
-    await loadAssignments(selectedCampaignId)
-    await load()
+    try {
+      await completeAssignment(assignmentId, amount)
+      await loadAssignments(selectedCampaignId)
+      await load()
+    } catch (err) {
+      alert('Could not complete assignment: ' + err.message)
+    }
   }
 
   if (loading) return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
@@ -871,22 +901,32 @@ export default function AdminDashboardPage() {
   useEffect(() => { fetchDrivers() }, [])
 
   async function approveDriver(id) {
-    await supabase.from('driver_profiles').update({ status: 'approved', kyc_status: 'approved' }).eq('id', id)
+    const { error } = await supabase.from('driver_profiles').update({ status: 'approved', kyc_status: 'approved' }).eq('id', id)
+    if (error) { alert('Could not approve driver: ' + error.message); return }
     fetchDrivers()
   }
 
   async function rejectDriver(id) {
-    await supabase.from('driver_profiles').update({ status: 'rejected', kyc_status: 'rejected' }).eq('id', id)
+    const { error } = await supabase.from('driver_profiles').update({ status: 'rejected', kyc_status: 'rejected' }).eq('id', id)
+    if (error) { alert('Could not reject driver: ' + error.message); return }
     fetchDrivers()
   }
 
   async function suspendDriver(id) {
-    await supabase.from('driver_profiles').update({ status: 'suspended' }).eq('id', id)
+    // Also force offline immediately — set_driver_online_status (schema.sql)
+    // already blocks a suspended driver from going online again, but
+    // without this an already-online driver stays showing "online" in
+    // their own UI (harmlessly, since dispatch/discovery both filter on
+    // status='approved' too, but confusingly) until they happen to
+    // toggle it themselves.
+    const { error } = await supabase.from('driver_profiles').update({ status: 'suspended', is_online: false }).eq('id', id)
+    if (error) { alert('Could not suspend driver: ' + error.message); return }
     fetchDrivers()
   }
 
   async function reactivateDriver(id) {
-    await supabase.from('driver_profiles').update({ status: 'approved' }).eq('id', id)
+    const { error } = await supabase.from('driver_profiles').update({ status: 'approved' }).eq('id', id)
+    if (error) { alert('Could not reactivate driver: ' + error.message); return }
     fetchDrivers()
   }
 
@@ -1046,21 +1086,13 @@ export default function AdminDashboardPage() {
               onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 10px 30px rgba(26,43,60,0.12)' }}
               onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(26,43,60,0.05)' }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div style={{ padding: 10, background: card.iconBg, borderRadius: 12 }}>
-                  <span className="material-symbols-outlined" style={{ fontSize: 22, color: card.iconColor }}>{card.icon}</span>
-                </div>
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#006d37' }}>{card.badge}</span>
+              <div style={{ padding: 10, background: '#d2e4fb', borderRadius: 12, display: 'inline-flex', alignSelf: 'flex-start' }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 22, color: '#4f6073' }}>{card.icon}</span>
               </div>
               <div>
                 <p style={{ fontSize: 13, color: '#4f6073', marginBottom: 4 }}>{card.label}</p>
                 <h3 style={{ fontSize: 32, fontWeight: 600, color: '#0b1c30', letterSpacing: '-0.01em', margin: 0 }}>{card.value}</h3>
               </div>
-              {card.progress && (
-                <div style={{ height: 6, background: '#e5eeff', borderRadius: 9999 }}>
-                  <div style={{ width: `${card.progress}%`, height: '100%', background: '#006d37', borderRadius: 9999 }} />
-                </div>
-              )}
             </div>
           ))}
         </section>

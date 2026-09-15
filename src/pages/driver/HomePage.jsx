@@ -729,7 +729,16 @@ export default function DriverHomePage() {
     // their app was closed/backgrounded. Without this, an offer made just
     // before the driver opens the app is invisible until it times out and
     // moves on to the next candidate (confirmed happening in testing).
+    //
+    // Excludes a ride whose offered_at was just backdated by reject_or_
+    // expire_ride (schema.sql) — that's this same driver's own rejection,
+    // not a fresh offer, and without this filter it would silently pop
+    // back into the queue as if it were new if the driver refreshes
+    // during the up-to-60s window before the next dispatch cron tick
+    // actually reassigns it elsewhere. A direct (non-auto) booking never
+    // sets offered_at at all, so those always still count as fresh.
     supabase.from('rides').select('*').eq('driver_id', driverProfileId).eq('status', 'requested')
+      .or(`offered_at.is.null,offered_at.gte.${new Date(Date.now() - 30000).toISOString()}`)
       .then(({ data }) => (data ?? []).forEach(handleIncomingRide))
 
     // Same problem, one step later: a driver who refreshes (or reopens the
@@ -906,7 +915,10 @@ export default function DriverHomePage() {
   async function handleStartRide() {
     if (!activeRide) return
     const { data, error } = await supabase.rpc('start_ride', { p_ride_id: activeRide.id })
-    if (error) return
+    if (error) {
+      alert('Could not start this ride: ' + error.message)
+      return
+    }
     setActiveRide(data)
   }
 
@@ -917,7 +929,10 @@ export default function DriverHomePage() {
     // time at a typical city driving speed, no live GPS tracking yet),
     // just no longer trusting the client to report its own numbers.
     const { error } = await supabase.rpc('complete_ride', { p_ride_id: activeRide.id })
-    if (error) return
+    if (error) {
+      alert('Could not complete this ride: ' + error.message)
+      return
+    }
     setActiveRide(null)
   }
 

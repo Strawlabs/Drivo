@@ -913,7 +913,11 @@ as $$
 begin
   update public.driver_profiles
   set is_online = p_is_online
-  where id = p_driver_id and user_id = auth.uid();
+  where id = p_driver_id and user_id = auth.uid()
+    -- Going offline is always allowed regardless of status; going
+    -- online requires being approved, so a suspended/rejected/pending
+    -- driver can't sit "online" showing up as available anywhere.
+    and (p_is_online = false or status = 'approved');
 end;
 $$;
 
@@ -1072,6 +1076,12 @@ begin
     and not exists (
       select 1 from public.rides x where x.driver_id = p_driver_id and x.status in ('accepted', 'active')
     )
+    -- Found during the end-to-end regression pass: a suspended driver
+    -- couldn't get freshly discovered/auto-matched (both dispatch_pending_rides
+    -- and fetchAvailableDrivers already filter status='approved'), but
+    -- nothing stopped them from accepting a ride still sitting in their
+    -- own queue from before suspension — this was the actual gap.
+    and exists (select 1 from public.driver_profiles where id = p_driver_id and status = 'approved')
   returning * into v_row;
 
   return v_row; -- null if the guard failed (already taken / already busy) — caller treats that as "lost the race," not an error

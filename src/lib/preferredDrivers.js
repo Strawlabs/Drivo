@@ -49,7 +49,7 @@ export async function removePreferredDriver(id) {
 export async function fetchPreferredDriversForRider(riderId) {
   const { data, error } = await supabase
     .from('preferred_drivers')
-    .select('id, status, saved_at, driver_id, driver_profiles(rating, is_online, upi_id, users(name), vehicles(make, model))')
+    .select('id, status, saved_at, driver_id, driver_profiles(rating, is_online, users(name), vehicles(make, model))')
     .eq('rider_id', riderId)
     .neq('status', 'removed')
     .order('saved_at', { ascending: false })
