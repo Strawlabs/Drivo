@@ -1866,8 +1866,19 @@ begin
     select * from public.scheduled_rides
     where status = 'scheduled' and scheduled_at <= now()
   loop
-    insert into public.rides (rider_id, driver_id, pickup_address, destination_address, status)
-    values (sr.rider_id, sr.preferred_driver_id, sr.pickup_address, sr.destination_address, 'requested')
+    -- Found during the end-to-end regression pass: dispatch_mode was
+    -- never set here, so it silently took the column's default ('direct')
+    -- even for an "Any Driver" scheduled ride (preferred_driver_id null)
+    -- — meaning driver_id was also null, and dispatch_pending_rides only
+    -- ever processes dispatch_mode='auto' rows, so that ride could never
+    -- be matched to anyone, permanently. Confirmed two real rides stuck
+    -- this way since mid-August.
+    insert into public.rides (rider_id, driver_id, dispatch_mode, pickup_address, destination_address, status)
+    values (
+      sr.rider_id, sr.preferred_driver_id,
+      case when sr.preferred_driver_id is null then 'auto' else 'direct' end,
+      sr.pickup_address, sr.destination_address, 'requested'
+    )
     returning id into new_ride_id;
 
     update public.scheduled_rides
