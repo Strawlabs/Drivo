@@ -27,6 +27,8 @@ import DriverGoHomePage from '@/pages/driver/GoHomePage'
 import DriverVerificationPage from '@/pages/driver/VerificationPage'
 import DriverSubscriptionPage from '@/pages/driver/SubscriptionPage'
 import DriverAdsPage from '@/pages/driver/AdsPage'
+import DriverSettingsPage from '@/pages/driver/SettingsPage'
+import DriverAnalyticsPage from '@/pages/driver/AnalyticsPage'
 import AdminDashboardPage from '@/pages/admin/DashboardPage'
 import NotificationsPage from '@/pages/NotificationsPage'
 import SharedTripPage from '@/pages/SharedTripPage'
@@ -149,6 +151,8 @@ function AppRoutes() {
       <Route path="/driver/subscription" element={<RoleRoute allowedRole="driver"><DriverSubscriptionPage /></RoleRoute>} />
       <Route path="/driver/ads"          element={<RoleRoute allowedRole="driver"><DriverAdsPage /></RoleRoute>} />
       <Route path="/driver/notifications" element={<RoleRoute allowedRole="driver"><NotificationsPage /></RoleRoute>} />
+      <Route path="/driver/settings"     element={<RoleRoute allowedRole="driver"><DriverSettingsPage /></RoleRoute>} />
+      <Route path="/driver/analytics"    element={<RoleRoute allowedRole="driver"><DriverAnalyticsPage /></RoleRoute>} />
 
       {/* Admin pages */}
       <Route path="/admin/dashboard" element={<RoleRoute allowedRole="admin"><AdminDashboardPage /></RoleRoute>} />
