@@ -681,7 +681,7 @@ async function fetchRiderStats(riderId) {
 }
 
 // ── TAB: Profile ────────────────────────────────────────────────
-function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDrivers, onOpenFamily, onOpenNotifications, onOpenHelp, onOpenSubscription }) {
+function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDrivers, onOpenFamily, onOpenNotifications, onOpenHelp, onOpenSubscription, onOpenPersonalInfo, onOpenMobileNumber, onOpenPaymentHistory, onOpenEcoImpact, onOpenSafetyCenter, onOpenTerms }) {
   const [stats, setStats] = useState({ trips: 0, co2SavedKg: 0 })
 
   useEffect(() => {
@@ -723,9 +723,9 @@ function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDriver
         {
           title: 'Account',
           items: [
-            { icon: '👤', label: 'Personal Information' },
-            { icon: '📱', label: 'Mobile Number' },
-            { icon: '💳', label: 'Payment Methods' },
+            { icon: '👤', label: 'Personal Information', onClick: onOpenPersonalInfo },
+            { icon: '📱', label: 'Mobile Number', onClick: onOpenMobileNumber },
+            { icon: '💳', label: 'Payment History', onClick: onOpenPaymentHistory },
           ]
         },
         {
@@ -734,16 +734,16 @@ function ProfileTab({ firstName, email, userId, onSignOut, onOpenPreferredDriver
             { icon: '🚗', label: 'Preferred Drivers', onClick: onOpenPreferredDrivers },
             { icon: '🎖️', label: 'Subscription', onClick: onOpenSubscription },
             { icon: '👨‍👩‍👧', label: 'Family', onClick: onOpenFamily },
-            { icon: '🌿', label: 'Eco Impact Report' },
+            { icon: '🌿', label: 'Eco Impact Report', onClick: onOpenEcoImpact },
             { icon: '🔔', label: 'Notifications', onClick: onOpenNotifications },
           ]
         },
         {
           title: 'Support',
           items: [
-            { icon: '🛡️', label: 'Safety Center' },
+            { icon: '🛡️', label: 'Safety Center', onClick: onOpenSafetyCenter },
             { icon: '❓', label: 'Help & Support', onClick: onOpenHelp },
-            { icon: '📄', label: 'Terms & Privacy' },
+            { icon: '📄', label: 'Terms & Privacy', onClick: onOpenTerms },
           ]
         },
       ].map(({ title, items }) => (
@@ -867,7 +867,7 @@ export default function RiderHomePage() {
         {activeNav === 'home'    && <HomeTab firstName={firstName.charAt(0).toUpperCase() + firstName.slice(1)} greeting={greeting} onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} onSchedule={() => navigate('/rider/schedule')} onBrowseDrivers={() => setActiveNav('drivers')} onRequestRide={destination => navigate('/rider/book-ride', { state: { destination } })} userId={user?.id} />}
         {activeNav === 'trips'   && <TripsTab userId={user?.id} />}
         {activeNav === 'drivers' && <DriversTab onBookDriver={driver => navigate('/rider/book-ride', { state: { driver } })} />}
-        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} userId={user?.id} onSignOut={handleSignOut} onOpenPreferredDrivers={() => navigate('/rider/preferred-drivers')} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} onOpenSubscription={() => navigate('/rider/subscription')} />}
+        {activeNav === 'profile' && <ProfileTab firstName={firstName} email={user?.email ?? ''} userId={user?.id} onSignOut={handleSignOut} onOpenPreferredDrivers={() => navigate('/rider/preferred-drivers')} onOpenFamily={() => navigate('/rider/family')} onOpenNotifications={() => navigate('/rider/notifications')} onOpenHelp={() => navigate('/rider/help')} onOpenSubscription={() => navigate('/rider/subscription')} onOpenPersonalInfo={() => navigate('/rider/personal-information')} onOpenMobileNumber={() => navigate('/rider/mobile-number')} onOpenPaymentHistory={() => navigate('/rider/payment-history')} onOpenEcoImpact={() => navigate('/rider/eco-impact')} onOpenSafetyCenter={() => navigate('/rider/safety-center')} onOpenTerms={() => navigate('/rider/terms')} />}
       </main>
 
       {/* Bottom Nav */}

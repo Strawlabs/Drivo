@@ -16,6 +16,12 @@ import ScheduledRidesPage from '@/pages/rider/ScheduledRidesPage'
 import FamilyPage from '@/pages/rider/FamilyPage'
 import PreferredDriversPage from '@/pages/rider/PreferredDriversPage'
 import RiderSubscriptionPage from '@/pages/rider/SubscriptionPage'
+import PersonalInformationPage from '@/pages/rider/PersonalInformationPage'
+import MobileNumberPage from '@/pages/rider/MobileNumberPage'
+import PaymentHistoryPage from '@/pages/rider/PaymentHistoryPage'
+import EcoImpactPage from '@/pages/rider/EcoImpactPage'
+import SafetyCenterPage from '@/pages/rider/SafetyCenterPage'
+import TermsPrivacyPage from '@/pages/rider/TermsPrivacyPage'
 import DriverHomePage from '@/pages/driver/HomePage'
 import DriverGoHomePage from '@/pages/driver/GoHomePage'
 import DriverVerificationPage from '@/pages/driver/VerificationPage'
@@ -129,6 +135,12 @@ function AppRoutes() {
       <Route path="/rider/preferred-drivers" element={<RoleRoute allowedRole="rider"><PreferredDriversPage /></RoleRoute>} />
       <Route path="/rider/subscription"  element={<RoleRoute allowedRole="rider"><RiderSubscriptionPage /></RoleRoute>} />
       <Route path="/rider/notifications" element={<RoleRoute allowedRole="rider"><NotificationsPage /></RoleRoute>} />
+      <Route path="/rider/personal-information" element={<RoleRoute allowedRole="rider"><PersonalInformationPage /></RoleRoute>} />
+      <Route path="/rider/mobile-number" element={<RoleRoute allowedRole="rider"><MobileNumberPage /></RoleRoute>} />
+      <Route path="/rider/payment-history" element={<RoleRoute allowedRole="rider"><PaymentHistoryPage /></RoleRoute>} />
+      <Route path="/rider/eco-impact" element={<RoleRoute allowedRole="rider"><EcoImpactPage /></RoleRoute>} />
+      <Route path="/rider/safety-center" element={<RoleRoute allowedRole="rider"><SafetyCenterPage /></RoleRoute>} />
+      <Route path="/rider/terms" element={<RoleRoute allowedRole="rider"><TermsPrivacyPage /></RoleRoute>} />
 
       {/* Driver pages */}
       <Route path="/driver/home"         element={<RoleRoute allowedRole="driver"><DriverHomePage /></RoleRoute>} />
