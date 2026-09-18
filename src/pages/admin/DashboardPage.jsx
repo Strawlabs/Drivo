@@ -878,6 +878,7 @@ export default function AdminDashboardPage() {
   const [drivers, setDrivers] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [vehicleFilter, setVehicleFilter] = useState('all')
   const [viewingDriver, setViewingDriver] = useState(null)
   const [adminName, setAdminName] = useState('Admin')
   const [activeNav, setActiveNav] = useState('Analytics')
@@ -933,6 +934,22 @@ export default function AdminDashboardPage() {
   const [platformStats, setPlatformStats] = useState(null)
   const [campaignSummary, setCampaignSummary] = useState([])
 
+  // Real "needs attention" count for the header bell — previously a
+  // hardcoded red dot that always showed regardless of whether anything
+  // actually needed review. Same three things the Safety tab surfaces
+  // (open incidents, unresolved SOS, flagged payments), fetched here too
+  // so the badge is accurate no matter which tab is currently open.
+  const [attentionCount, setAttentionCount] = useState(0)
+  useEffect(() => {
+    Promise.all([
+      supabase.from('incident_reports').select('id', { count: 'exact', head: true }).eq('status', 'open'),
+      supabase.from('sos_events').select('id', { count: 'exact', head: true }).is('resolved_at', null),
+      supabase.from('payments').select('id', { count: 'exact', head: true }).eq('status', 'flagged'),
+    ]).then(([inc, sos, flagged]) => {
+      setAttentionCount((inc.count ?? 0) + (sos.count ?? 0) + (flagged.count ?? 0))
+    })
+  }, [])
+
   useEffect(() => {
     async function loadStats() {
       const data = await fetchPlatformData()
@@ -961,7 +978,9 @@ export default function AdminDashboardPage() {
   const filteredDrivers = pendingDrivers.filter(d => {
     const name = d.users?.name ?? ''
     const email = d.users?.email ?? ''
-    return name.toLowerCase().includes(search.toLowerCase()) || email.toLowerCase().includes(search.toLowerCase())
+    const matchesSearch = name.toLowerCase().includes(search.toLowerCase()) || email.toLowerCase().includes(search.toLowerCase())
+    const matchesVehicle = vehicleFilter === 'all' || d.vehicles?.[0]?.vehicle_type === vehicleFilter
+    return matchesSearch && matchesVehicle
   })
 
   const totalApproved = drivers.filter(d => d.status === 'approved').length
@@ -1044,9 +1063,12 @@ export default function AdminDashboardPage() {
             <p style={{ fontSize: 15, color: '#4f6073', marginTop: 4 }}>Real-time performance metrics and operations.</p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <button style={{ width: 44, height: 44, borderRadius: '50%', border: 'none', background: 'white', boxShadow: '0 1px 4px rgba(26,43,60,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', position: 'relative' }}>
+            <button onClick={() => setActiveNav('Safety')} title={attentionCount > 0 ? `${attentionCount} item${attentionCount === 1 ? '' : 's'} need attention` : 'Nothing needs attention'}
+              style={{ width: 44, height: 44, borderRadius: '50%', border: 'none', background: 'white', boxShadow: '0 1px 4px rgba(26,43,60,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', position: 'relative' }}>
               <span className="material-symbols-outlined" style={{ fontSize: 22, color: '#0b1c30' }}>notifications</span>
-              <span style={{ position: 'absolute', top: 10, right: 10, width: 8, height: 8, background: '#ba1a1a', borderRadius: '50%' }} />
+              {attentionCount > 0 && (
+                <span style={{ position: 'absolute', top: 10, right: 10, width: 8, height: 8, background: '#ba1a1a', borderRadius: '50%' }} />
+              )}
             </button>
             <div style={{ width: 1, height: 36, background: '#bbcbbb', margin: '0 4px' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1185,10 +1207,15 @@ export default function AdminDashboardPage() {
                   style={{ paddingLeft: 38, paddingRight: 16, height: 38, border: 'none', borderRadius: 8, background: '#eff4ff', fontSize: 13, color: '#0b1c30', outline: 'none', width: 220 }}
                 />
               </div>
-              <button style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', height: 38, background: '#006d37', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>filter_list</span>
-                Filters
-              </button>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <span className="material-symbols-outlined" style={{ position: 'absolute', left: 12, fontSize: 16, color: 'white', pointerEvents: 'none' }}>filter_list</span>
+                <select value={vehicleFilter} onChange={e => setVehicleFilter(e.target.value)}
+                  style={{ appearance: 'none', paddingLeft: 34, paddingRight: 16, height: 38, background: '#006d37', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                  <option value="all" style={{ color: '#0b1c30' }}>All Vehicles</option>
+                  <option value="ev_auto" style={{ color: '#0b1c30' }}>EV Auto</option>
+                  <option value="ev_car" style={{ color: '#0b1c30' }}>EV Car</option>
+                </select>
+              </div>
             </div>
           </div>
 
