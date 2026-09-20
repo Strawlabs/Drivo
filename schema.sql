@@ -83,6 +83,7 @@ create table public.rides (
   duration_minutes int,
   cancellation_reason text,
   cancelled_by uuid references public.users(id),
+  accepted_at timestamptz,
   started_at timestamptz,
   completed_at timestamptz,
   created_at timestamptz not null default now(),
@@ -862,9 +863,46 @@ create index if not exists ad_campaigns_status_idx on public.ad_campaigns (statu
 drop policy if exists "dev_all_users" on public.users;
 create policy "users_select_authenticated" on public.users for select using (auth.uid() is not null);
 create policy "users_insert_self" on public.users for insert with check (auth.uid() = id);
-create policy "users_update_self_or_admin" on public.users for update
-  using (auth.uid() = id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
-  with check (auth.uid() = id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+-- users_update_self_or_admin (removed below) was the same missing-
+-- column-restriction shape found repeatedly this session, on the most
+-- severe possible table: USING/WITH CHECK only checked "is this my own
+-- row," so any authenticated user could run
+-- `update({role:'admin'}).eq('id', myId)` and self-promote to admin —
+-- full privilege escalation to every admin capability in the app
+-- (approve/suspend drivers, resolve flagged payments, edit pricing,
+-- everything). Confirmed live and reverted immediately. Found while
+-- building a "Personal Information" self-edit page and checking what
+-- this policy would actually let that page touch. Zero existing code
+-- anywhere in the app currently writes to users directly (grepped for
+-- it), so nothing legitimate depends on the raw policy — the profile
+-- self-edit page instead calls update_my_profile below, which
+-- whitelists exactly the safe columns (name, email, phone,
+-- profile_picture) and can never touch role or is_active.
+drop policy if exists "users_update_self_or_admin" on public.users;
+create policy "users_admin_update" on public.users for update
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+create or replace function public.update_my_profile(p_name text, p_email text, p_phone text)
+returns public.users
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row public.users;
+begin
+  update public.users
+  set name = p_name, email = p_email, phone = p_phone
+  where id = auth.uid()
+  returning * into v_row;
+
+  return v_row;
+exception
+  when unique_violation then
+    raise exception 'That phone number is already registered to another account.';
+end;
+$$;
 create policy "users_delete_self" on public.users for delete using (auth.uid() = id);
 
 -- DRIVER_PROFILES — riders need to browse/read any driver (Discovery,
@@ -879,9 +917,122 @@ create policy "users_delete_self" on public.users for delete using (auth.uid() =
 drop policy if exists "dev_all_driver_profiles" on public.driver_profiles;
 create policy "driver_profiles_select_authenticated" on public.driver_profiles for select using (auth.uid() is not null);
 create policy "driver_profiles_insert_self" on public.driver_profiles for insert with check (auth.uid() = user_id);
-create policy "driver_profiles_update_self_or_admin" on public.driver_profiles for update
-  using (auth.uid() = user_id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
-  with check (auth.uid() = user_id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+-- driver_profiles_update_self_or_admin (removed below) let a driver
+-- self-update ANY column once ownership passed — same missing-column-
+-- restriction shape as rides/payments/subscriptions, just harder to
+-- notice since "using = with check, both just ownership" reads as
+-- fine at a glance. In practice a driver could run
+-- `update({kyc_status:'approved', status:'approved', rating:5})`
+-- straight from the browser console and self-approve their own KYC.
+-- Found live during a full end-to-end regression pass, verified with
+-- a second, subtler bug: recalculateDriverRating (src/lib/drivers.js)
+-- is always called by the RIDER after leaving a review, not the
+-- driver — under the old policy that update was silently filtered to
+-- zero rows (no error, since UPDATE's USING clause just excludes non-
+-- matching rows rather than raising), meaning every driver's
+-- rating/total_rides has been frozen since this policy existed.
+-- Confirmed live: total_rides stayed at 4 after recalculating against
+-- 6 real ride_ratings rows. Moves every real self-transition (online
+-- toggle, live location, KYC submission) and the rating recalculation
+-- into security-definer functions, then locks the raw policy to admin
+-- only — same pattern as everywhere else this session.
+drop policy if exists "driver_profiles_update_self_or_admin" on public.driver_profiles;
+create policy "driver_profiles_admin_update" on public.driver_profiles for update
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+create or replace function public.set_driver_online_status(p_driver_id uuid, p_is_online boolean)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.driver_profiles
+  set is_online = p_is_online
+  where id = p_driver_id and user_id = auth.uid()
+    -- Going offline is always allowed regardless of status; going
+    -- online requires being approved, so a suspended/rejected/pending
+    -- driver can't sit "online" showing up as available anywhere.
+    and (p_is_online = false or status = 'approved');
+end;
+$$;
+
+create or replace function public.update_driver_location(p_driver_id uuid, p_lat numeric, p_lng numeric)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.driver_profiles
+  set current_latitude = p_lat, current_longitude = p_lng
+  where id = p_driver_id and user_id = auth.uid();
+end;
+$$;
+
+-- A driver can (re-)submit whenever they aren't already approved —
+-- covers both the first submission and re-uploading after a rejection.
+create or replace function public.submit_kyc_documents(p_driver_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.driver_profiles
+  set kyc_status = 'submitted'
+  where id = p_driver_id and user_id = auth.uid() and kyc_status <> 'approved';
+end;
+$$;
+
+-- Found while building the driver Settings page: upi_id (what
+-- buildUpiLink in src/lib/payments.js reads to build the rider's
+-- payment deep link) was never settable anywhere in the app — every
+-- test driver's value came from seed data, not any real flow. Same
+-- whitelist-one-field pattern as the other driver_profiles functions.
+create or replace function public.update_driver_payout_info(p_driver_id uuid, p_upi_id text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.driver_profiles
+  set upi_id = p_upi_id
+  where id = p_driver_id and user_id = auth.uid();
+end;
+$$;
+
+-- Deliberately callable by anyone authenticated, not just the driver:
+-- it only ever recomputes from real ride_ratings rows (each one
+-- already validated at insert time against a real completed ride the
+-- rating's own rider actually took — see ride_ratings_insert_self
+-- below), so there's no exploitable input here, only a self-correcting
+-- recalculation that was previously impossible for the rider who
+-- triggers it to perform at all.
+create or replace function public.recalculate_driver_rating(p_driver_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_avg numeric;
+  v_count int;
+begin
+  select round(avg(rating)::numeric, 2), count(*) into v_avg, v_count
+  from public.ride_ratings where driver_id = p_driver_id;
+
+  if v_count = 0 then
+    return;
+  end if;
+
+  update public.driver_profiles
+  set rating = v_avg, total_rides = v_count
+  where id = p_driver_id;
+end;
+$$;
 
 -- VEHICLES — same broad-read shape as driver_profiles (riders browse
 -- vehicle info on any driver); writes limited to the owning driver
@@ -923,12 +1074,206 @@ create policy "rides_insert_self_or_family_owner" on public.rides for insert
     auth.uid() = rider_id
     or auth.uid() in (select primary_user_id from public.family_accounts where member_user_id = rides.rider_id and status = 'active')
   );
-create policy "rides_update_involved" on public.rides for update
-  using (
-    auth.uid() = rider_id
-    or auth.uid() in (select user_id from public.driver_profiles where id = driver_id)
-    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
-  );
+-- rides_update_involved (removed below) had no WITH CHECK either — the
+-- same missing-half-of-the-policy pattern as payments/subscriptions,
+-- just on the app's central table: a rider or driver "involved" in a
+-- ride could set ANY field to anything once that USING clause passed —
+-- final_fare, distance_km, status jumping straight from 'requested' to
+-- 'completed', even reassigning driver_id to a driver who never
+-- accepted it. Found by sweeping every UPDATE/ALL policy in this file
+-- for the same gap after finding it twice already this session. Moves
+-- every real transition (accept/start/complete/reject-or-expire/
+-- cancel) into security-definer functions below, each re-checking the
+-- ride's actual current state and the caller's actual ownership,
+-- computing the state-machine-sensitive fields (accepted_at,
+-- started_at, completed_at, final_fare, duration_minutes, distance_km)
+-- server-side instead of trusting whatever the client sends.
+--
+-- Also found live (not from this file at all — pg_policies on the
+-- production DB, checked after this fix appeared to have no effect):
+-- two much older, human-named policies, "Riders manage their rides"
+-- (ALL, rider_id = auth.uid()) and "Drivers see and update assigned
+-- rides" (ALL, driver_id = auth.uid()), predating the *_involved
+-- policies below and never captured anywhere in this file. The first
+-- one alone fully explained the leftover exploit — a permissive ALL
+-- policy ORs in regardless of how tight rides_admin_update is. The
+-- second is structurally almost always false in practice (driver_id
+-- stores a driver_profiles.id, not the driver's own auth id) but was
+-- undocumented cruft either way. Both dropped below so this file
+-- actually matches what's live.
+drop policy if exists "Riders manage their rides" on public.rides;
+drop policy if exists "Drivers see and update assigned rides" on public.rides;
+drop policy if exists "rides_update_involved" on public.rides;
+create policy "rides_admin_update" on public.rides for update
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+create or replace function public.accept_ride(p_ride_id uuid, p_driver_id uuid)
+returns public.rides
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row public.rides;
+begin
+  if not exists (select 1 from public.driver_profiles where id = p_driver_id and user_id = auth.uid()) then
+    raise exception 'Not authorized to accept rides as this driver.';
+  end if;
+
+  update public.rides
+  set status = 'accepted', accepted_at = now()
+  where id = p_ride_id
+    and driver_id = p_driver_id
+    and status = 'requested'
+    -- A driver can't hold two rides at once — enforced here, not just
+    -- as a pre-check in the client that a direct RPC call could skip.
+    and not exists (
+      select 1 from public.rides x where x.driver_id = p_driver_id and x.status in ('accepted', 'active')
+    )
+    -- Found during the end-to-end regression pass: a suspended driver
+    -- couldn't get freshly discovered/auto-matched (both dispatch_pending_rides
+    -- and fetchAvailableDrivers already filter status='approved'), but
+    -- nothing stopped them from accepting a ride still sitting in their
+    -- own queue from before suspension — this was the actual gap.
+    and exists (select 1 from public.driver_profiles where id = p_driver_id and status = 'approved')
+  returning * into v_row;
+
+  return v_row; -- null if the guard failed (already taken / already busy) — caller treats that as "lost the race," not an error
+end;
+$$;
+
+create or replace function public.start_ride(p_ride_id uuid)
+returns public.rides
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row public.rides;
+begin
+  update public.rides
+  set status = 'active', started_at = now()
+  where id = p_ride_id
+    and status = 'accepted'
+    and driver_id in (select id from public.driver_profiles where user_id = auth.uid())
+  returning * into v_row;
+
+  if not found then
+    raise exception 'This ride cannot be started right now.';
+  end if;
+  return v_row;
+end;
+$$;
+
+create or replace function public.complete_ride(p_ride_id uuid)
+returns public.rides
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_ride public.rides;
+  v_duration_minutes int;
+  v_distance_km numeric;
+  v_row public.rides;
+begin
+  select * into v_ride from public.rides
+  where id = p_ride_id and status = 'active'
+    and driver_id in (select id from public.driver_profiles where user_id = auth.uid());
+  if not found then
+    raise exception 'This ride cannot be completed right now.';
+  end if;
+
+  -- No live GPS tracking yet — same approximation the client used to
+  -- compute itself: elapsed time at a typical city driving speed.
+  v_duration_minutes := greatest(1, round((extract(epoch from (now() - coalesce(v_ride.started_at, now()))) / 60)::numeric));
+  v_distance_km := round((v_duration_minutes::numeric / 60) * 20, 1);
+
+  update public.rides
+  set status = 'completed', completed_at = now(),
+      final_fare = v_ride.estimated_fare,
+      duration_minutes = v_duration_minutes,
+      distance_km = v_distance_km
+  where id = p_ride_id
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+
+-- Mirrors releaseOrExpire's two branches exactly: an auto-dispatched
+-- offer goes back into dispatch_pending_rides' pool via a backdated
+-- offered_at (the next cron tick treats it as stale and reassigns);
+-- a direct booking just expires, since there's no pool to fall back
+-- into. Silently no-ops if the ride already moved on (another sweep
+-- already reassigned it) rather than erroring.
+create or replace function public.reject_or_expire_ride(p_ride_id uuid, p_driver_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_mode text;
+begin
+  if not exists (select 1 from public.driver_profiles where id = p_driver_id and user_id = auth.uid()) then
+    raise exception 'Not authorized to act on rides as this driver.';
+  end if;
+
+  select dispatch_mode into v_mode from public.rides
+  where id = p_ride_id and driver_id = p_driver_id and status = 'requested';
+  if not found then
+    return;
+  end if;
+
+  if v_mode = 'auto' then
+    update public.rides set offered_at = now() - interval '31 seconds'
+    where id = p_ride_id and driver_id = p_driver_id and status = 'requested';
+  else
+    update public.rides set status = 'expired'
+    where id = p_ride_id and driver_id = p_driver_id and status = 'requested';
+  end if;
+end;
+$$;
+
+create or replace function public.cancel_ride(p_ride_id uuid, p_reason text default 'Cancelled by rider')
+returns public.rides
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row public.rides;
+  v_driver_user_id uuid;
+begin
+  update public.rides
+  set status = 'cancelled', cancellation_reason = p_reason, cancelled_by = auth.uid()
+  where id = p_ride_id and rider_id = auth.uid() and status not in ('completed', 'cancelled')
+  returning * into v_row;
+
+  if not found then
+    raise exception 'This ride cannot be cancelled right now.';
+  end if;
+
+  -- Moved server-side rather than left to the client's own follow-up
+  -- notifyDriverProfile call, so a driver who already accepted is
+  -- guaranteed to hear about it even if that second call never fires.
+  if v_row.driver_id is not null then
+    select user_id into v_driver_user_id from public.driver_profiles where id = v_row.driver_id;
+    if v_driver_user_id is not null then
+      insert into public.notifications (user_id, category, title, body, data)
+      values (
+        v_driver_user_id, 'ride_alert', 'Ride cancelled',
+        'The rider cancelled the trip to ' || coalesce(v_row.destination_address, 'their destination') || '.',
+        jsonb_build_object('rideId', p_ride_id)
+      );
+    end if;
+  end if;
+
+  return v_row;
+end;
+$$;
 
 -- PAYMENTS — rider creates/confirms their own; assigned driver and
 -- admin can read (earnings, reports). Insert also checks the
@@ -950,8 +1295,123 @@ create policy "payments_insert_self" on public.payments for insert
     auth.uid() = rider_id
     and exists (select 1 from public.rides r where r.id = payments.ride_id and r.rider_id = auth.uid())
   );
-create policy "payments_update_self_or_admin" on public.payments for update
-  using (auth.uid() = rider_id or exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+-- payments_update_self_or_admin (removed below) had no WITH CHECK, so
+-- Postgres reused its USING clause for both — meaning once "is this my
+-- own payment" passed, a rider could set status/upi_reference/paid_at
+-- to literally anything, including marking their own failed or
+-- flagged ride payment 'completed' with a fabricated reference,
+-- bypassing confirmUpiPayment's fraud check entirely. Confirmed live
+-- and exploitable before this fix. Moves both real transitions
+-- (confirm/fail) into security-definer functions that re-check the
+-- payment's current state and compute the fraud flag server-side
+-- (fixing the same client-side SELECT-then-UPDATE race the subscription
+-- fix addressed), then locks the table so a rider's own session can no
+-- longer write to it directly at all — see SUBSCRIPTION PURCHASE
+-- INTEGRITY above for the identical pattern.
+drop policy if exists "payments_update_self_or_admin" on public.payments;
+create policy "payments_admin_update" on public.payments for update
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+create or replace function public.confirm_upi_payment(p_payment_id uuid, p_upi_reference text)
+returns public.payments
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_payment public.payments;
+  v_flagged boolean;
+  v_row public.payments;
+begin
+  select * into v_payment from public.payments where id = p_payment_id;
+  if not found then
+    raise exception 'Payment not found.';
+  end if;
+  if v_payment.rider_id <> auth.uid() then
+    raise exception 'Not authorized to confirm this payment.';
+  end if;
+  if v_payment.status <> 'pending' then
+    raise exception 'This payment is not awaiting confirmation.';
+  end if;
+
+  v_flagged := exists (
+    select 1 from public.payments where upi_reference = p_upi_reference and id <> p_payment_id
+  );
+
+  update public.payments
+  set status = case when v_flagged then 'flagged' else 'completed' end,
+      upi_reference = p_upi_reference,
+      paid_at = case when v_flagged then null else now() end
+  where id = p_payment_id
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+
+create or replace function public.fail_upi_payment(p_payment_id uuid)
+returns public.payments
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_payment public.payments;
+  v_row public.payments;
+begin
+  select * into v_payment from public.payments where id = p_payment_id;
+  if not found then
+    raise exception 'Payment not found.';
+  end if;
+  if v_payment.rider_id <> auth.uid() then
+    raise exception 'Not authorized to update this payment.';
+  end if;
+  if v_payment.status <> 'pending' then
+    raise exception 'This payment cannot be marked failed from its current state.';
+  end if;
+
+  update public.payments set status = 'failed' where id = p_payment_id returning * into v_row;
+  return v_row;
+end;
+$$;
+
+-- The other half of the original gap: a flagged payment had nowhere to
+-- go. Nothing surfaced it to an admin, and nothing could ever move it
+-- out of 'flagged' even if someone noticed — confirm_upi_payment only
+-- transitions a 'pending' payment, by design, so a flagged one is
+-- otherwise permanently stuck. This is the one deliberate exception:
+-- an admin, after actually reviewing the conflicting references,
+-- decides which payment (if either) was legitimate.
+create or replace function public.admin_resolve_flagged_payment(p_payment_id uuid, p_resolution text)
+returns public.payments
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row public.payments;
+begin
+  if not exists (select 1 from public.users where id = auth.uid() and role = 'admin') then
+    raise exception 'Not authorized.';
+  end if;
+  if p_resolution not in ('completed', 'failed') then
+    raise exception 'Invalid resolution — must be completed or failed.';
+  end if;
+
+  update public.payments
+  set status = p_resolution,
+      paid_at = case when p_resolution = 'completed' then now() else null end
+  where id = p_payment_id and status = 'flagged'
+  returning * into v_row;
+
+  if not found then
+    raise exception 'Payment is not currently flagged.';
+  end if;
+
+  return v_row;
+end;
+$$;
 
 -- NOTIFICATIONS — strictly self-only for read/update (this is private
 -- per-user data, no admin exception needed since no admin view reads
@@ -1014,3 +1474,894 @@ drop policy if exists "dev_all_receipts_objects" on storage.objects;
 create policy "receipts_objects_select_public" on storage.objects for select using (bucket_id = 'receipts');
 create policy "receipts_objects_insert_authenticated" on storage.objects for insert
   with check (bucket_id = 'receipts' and auth.uid() is not null);
+
+-- ============================================================
+-- RIDER SUBSCRIPTIONS TASK
+--
+-- ELIGIBLE_TIERS = ['care', 'family'] (src/lib/preferredDrivers.js) has
+-- gated Preferred Drivers since that task, but nothing ever let a rider
+-- actually become 'care'/'family' — users.subscription_tier was only
+-- ever read, never written from the rider side; it had to be set by
+-- hand in the DB. This mirrors the driver subscriptions pattern exactly
+-- (own plans/subscriptions tables, self-reported UPI reference, same
+-- active -> grace_period -> expired transition, client-side since there's
+-- still no backend cron) so riders get a real in-app upgrade flow instead
+-- of a flag nobody can flip.
+--
+-- Kept as its own table pair rather than reusing subscription_plans/
+-- driver_subscriptions — those FK to driver_profiles, not users, and
+-- mixing rider/driver plans in one catalog would make "is this plan for
+-- a rider or a driver" implicit instead of structural.
+--
+-- Care and Family unlock the exact same real, already-gated benefit
+-- (preferred_drivers) — there's no second gated feature in this app to
+-- differentiate them on yet, so they're priced/duration apart instead
+-- (Family is the better-value, longer-commitment option) rather than
+-- inventing a feature split that doesn't exist in code.
+--
+-- users.subscription_tier is left in place but no longer the source of
+-- truth — src/lib/preferredDrivers.js's fetchSubscriptionTier now
+-- derives the effective tier from rider_subscriptions instead.
+-- ============================================================
+
+create table if not exists public.rider_subscription_plans (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (name in ('care', 'family')),
+  price numeric(10,2) not null,
+  duration_days int not null,
+  benefits jsonb,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.rider_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  rider_id uuid not null references public.users(id),
+  plan_id uuid not null references public.rider_subscription_plans(id),
+  status text not null default 'active' check (status in ('active', 'expired', 'cancelled', 'grace_period')),
+  start_date date not null,
+  expiry_date date not null,
+  payment_method text check (payment_method in ('upi')),
+  payment_reference text,
+  paid_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+insert into public.rider_subscription_plans (name, price, duration_days, benefits)
+select 'care', 99, 30, '{"preferred_drivers": true}'::jsonb
+where not exists (select 1 from public.rider_subscription_plans where name = 'care');
+
+insert into public.rider_subscription_plans (name, price, duration_days, benefits)
+select 'family', 249, 90, '{"preferred_drivers": true}'::jsonb
+where not exists (select 1 from public.rider_subscription_plans where name = 'family');
+
+alter table public.rider_subscription_plans enable row level security;
+alter table public.rider_subscriptions enable row level security;
+
+-- Catalog is readable by any authenticated user (rendering the
+-- upgrade screen); only admins manage it.
+create policy "rider_subscription_plans_select_all"
+  on public.rider_subscription_plans for select
+  using (true);
+
+create policy "rider_subscription_plans_admin_write"
+  on public.rider_subscription_plans for all
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- Unlike driver_subscriptions (deliberately open so any rider can sort
+-- Discovery by another driver's tier), no one needs to see a different
+-- rider's subscription — scoped to the owning rider and admins only.
+create policy "rider_subscriptions_select_own_or_admin"
+  on public.rider_subscriptions for select
+  using (
+    auth.uid() = rider_id
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+create policy "rider_subscriptions_insert_own"
+  on public.rider_subscriptions for insert
+  with check (auth.uid() = rider_id);
+
+create policy "rider_subscriptions_update_own_or_admin"
+  on public.rider_subscriptions for update
+  using (
+    auth.uid() = rider_id
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  )
+  with check (
+    auth.uid() = rider_id
+    or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+  );
+
+create index if not exists rider_subscriptions_rider_idx on public.rider_subscriptions (rider_id, status);
+
+-- ============================================================
+-- SERVER-SIDE SCHEDULED JOBS (pg_cron)
+-- ============================================================
+-- Every timed feature below used to be a setInterval/setTimeout running
+-- only while some browser tab happened to be open (Go Home Mode expiry,
+-- UPI payment timeout, subscription grace/expiry, scheduled-ride dispatch
+-- + reminders — see the client-side comments this replaces in
+-- src/lib/goHome.js, src/lib/payments.js, src/lib/subscriptions.js,
+-- src/lib/riderSubscriptions.js, src/lib/family.js). These pg_cron jobs
+-- are the real, always-on version of the same logic; the client-side
+-- versions are left in place as a fast local nudge when a tab IS open,
+-- but are no longer what makes any of this actually happen.
+--
+-- Re-runnable: each job is unscheduled before being (re)scheduled, so
+-- pasting this whole block again (e.g. after an edit) is safe.
+
+create extension if not exists pg_cron;
+
+-- Go Home Mode: expire any active session whose end_time has passed.
+create or replace function public.expire_stale_go_home_sessions()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.go_home_sessions
+  set status = 'expired', updated_at = now()
+  where status = 'active' and end_time < now();
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'expire-go-home-sessions';
+select cron.schedule('expire-go-home-sessions', '* * * * *', $$select public.expire_stale_go_home_sessions();$$);
+
+-- UPI ride payments: no gateway callback exists for this MVP, so a
+-- pending UPI payment nobody confirms within 2 minutes fails instead of
+-- sitting pending forever (mirrors RideCompletePage's client-side timer).
+create or replace function public.expire_stale_upi_payments()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.payments
+  set status = 'failed'
+  where status = 'pending'
+    and method = 'upi'
+    and created_at < now() - interval '120 seconds';
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'expire-stale-upi-payments';
+select cron.schedule('expire-stale-upi-payments', '* * * * *', $$select public.expire_stale_upi_payments();$$);
+
+-- Driver subscriptions: active -> grace_period once expiry_date has
+-- passed, grace_period/active -> expired once GRACE_PERIOD_DAYS (3) further.
+create or replace function public.update_driver_subscription_statuses()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.driver_subscriptions
+  set status = 'grace_period'
+  where status = 'active'
+    and expiry_date < current_date
+    and expiry_date >= current_date - 3;
+
+  update public.driver_subscriptions
+  set status = 'expired'
+  where status in ('active', 'grace_period')
+    and expiry_date < current_date - 3;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'update-driver-subscription-statuses';
+select cron.schedule('update-driver-subscription-statuses', '0 1 * * *', $$select public.update_driver_subscription_statuses();$$);
+
+-- Rider subscriptions: same active -> grace_period -> expired transition.
+create or replace function public.update_rider_subscription_statuses()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.rider_subscriptions
+  set status = 'grace_period'
+  where status = 'active'
+    and expiry_date < current_date
+    and expiry_date >= current_date - 3;
+
+  update public.rider_subscriptions
+  set status = 'expired'
+  where status in ('active', 'grace_period')
+    and expiry_date < current_date - 3;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'update-rider-subscription-statuses';
+select cron.schedule('update-rider-subscription-statuses', '0 1 * * *', $$select public.update_rider_subscription_statuses();$$);
+
+-- ============================================================
+-- SUBSCRIPTION PURCHASE INTEGRITY
+-- driver_subscriptions_insert_own / rider_subscriptions_insert_own only
+-- ever checked that the row belonged to the caller — nothing validated
+-- plan_id, status, expiry_date, or payment_reference. All of that was
+-- computed correctly in subscriptions.js/riderSubscriptions.js, but
+-- purely client-side: any driver or rider could bypass the app entirely
+-- and INSERT a row straight from the browser console with status
+-- 'active' and an expiry_date years out, granting themselves Elite (or
+-- Family) for free — which also unlocks ad-campaign eligibility and
+-- Preferred Riders approval, both gated on this same table. Moves
+-- activation/renewal into security-definer functions that compute
+-- expiry server-side and check payment_reference uniqueness under a
+-- real unique index (not just a client-side SELECT-then-INSERT, which
+-- two near-simultaneous calls could both pass), then locks the table
+-- down so a direct client insert/update can no longer create or alter
+-- a subscription at all — only these functions and an admin can.
+-- ============================================================
+
+create unique index if not exists driver_subscriptions_payment_reference_idx
+  on public.driver_subscriptions (payment_reference) where payment_reference is not null;
+create unique index if not exists rider_subscriptions_payment_reference_idx
+  on public.rider_subscriptions (payment_reference) where payment_reference is not null;
+
+create or replace function public.activate_driver_subscription(p_driver_id uuid, p_plan_id uuid, p_payment_reference text)
+returns public.driver_subscriptions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_plan public.subscription_plans;
+  v_row public.driver_subscriptions;
+begin
+  if not exists (select 1 from public.driver_profiles where id = p_driver_id and user_id = auth.uid()) then
+    raise exception 'Not authorized to modify this driver''s subscription.';
+  end if;
+
+  select * into v_plan from public.subscription_plans where id = p_plan_id and is_active = true;
+  if not found then
+    raise exception 'Selected plan is not available.';
+  end if;
+
+  -- Switching plans replaces whatever's currently active/lapsed — a
+  -- driver can't hold two simultaneously-active plans.
+  update public.driver_subscriptions
+  set status = 'cancelled'
+  where driver_id = p_driver_id and status in ('active', 'grace_period');
+
+  insert into public.driver_subscriptions
+    (driver_id, plan_id, status, start_date, expiry_date, payment_method, payment_reference, paid_at)
+  values
+    (p_driver_id, p_plan_id, 'active', current_date, current_date + v_plan.duration_days, 'upi', p_payment_reference, now())
+  returning * into v_row;
+
+  return v_row;
+exception
+  when unique_violation then
+    raise exception 'This payment reference has already been used. Please check your UPI reference.';
+end;
+$$;
+
+create or replace function public.renew_driver_subscription(p_driver_id uuid, p_plan_id uuid, p_payment_reference text)
+returns public.driver_subscriptions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_plan public.subscription_plans;
+  v_current public.driver_subscriptions;
+  v_start date;
+  v_row public.driver_subscriptions;
+begin
+  if not exists (select 1 from public.driver_profiles where id = p_driver_id and user_id = auth.uid()) then
+    raise exception 'Not authorized to modify this driver''s subscription.';
+  end if;
+
+  select * into v_plan from public.subscription_plans where id = p_plan_id and is_active = true;
+  if not found then
+    raise exception 'Selected plan is not available.';
+  end if;
+
+  -- Re-derive "the current subscription" server-side (same rule as
+  -- fetchCurrentSubscription) rather than trusting whatever the caller
+  -- claims — renewal extends access without interruption only if that
+  -- current row is genuinely still active and unexpired.
+  select * into v_current from public.driver_subscriptions
+  where driver_id = p_driver_id and status in ('active', 'grace_period')
+  order by expiry_date desc limit 1;
+
+  if found and v_current.status = 'active' and v_current.expiry_date >= current_date then
+    v_start := v_current.expiry_date;
+  else
+    v_start := current_date;
+  end if;
+
+  if found then
+    update public.driver_subscriptions set status = 'cancelled' where id = v_current.id;
+  end if;
+
+  insert into public.driver_subscriptions
+    (driver_id, plan_id, status, start_date, expiry_date, payment_method, payment_reference, paid_at)
+  values
+    (p_driver_id, p_plan_id, 'active', v_start, v_start + v_plan.duration_days, 'upi', p_payment_reference, now())
+  returning * into v_row;
+
+  return v_row;
+exception
+  when unique_violation then
+    raise exception 'This payment reference has already been used. Please check your UPI reference.';
+end;
+$$;
+
+create or replace function public.activate_rider_subscription(p_rider_id uuid, p_plan_id uuid, p_payment_reference text)
+returns public.rider_subscriptions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_plan public.rider_subscription_plans;
+  v_row public.rider_subscriptions;
+begin
+  if auth.uid() <> p_rider_id then
+    raise exception 'Not authorized to modify this subscription.';
+  end if;
+
+  select * into v_plan from public.rider_subscription_plans where id = p_plan_id and is_active = true;
+  if not found then
+    raise exception 'Selected plan is not available.';
+  end if;
+
+  update public.rider_subscriptions
+  set status = 'cancelled'
+  where rider_id = p_rider_id and status in ('active', 'grace_period');
+
+  insert into public.rider_subscriptions
+    (rider_id, plan_id, status, start_date, expiry_date, payment_method, payment_reference, paid_at)
+  values
+    (p_rider_id, p_plan_id, 'active', current_date, current_date + v_plan.duration_days, 'upi', p_payment_reference, now())
+  returning * into v_row;
+
+  return v_row;
+exception
+  when unique_violation then
+    raise exception 'This payment reference has already been used. Please check your UPI reference.';
+end;
+$$;
+
+create or replace function public.renew_rider_subscription(p_rider_id uuid, p_plan_id uuid, p_payment_reference text)
+returns public.rider_subscriptions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_plan public.rider_subscription_plans;
+  v_current public.rider_subscriptions;
+  v_start date;
+  v_row public.rider_subscriptions;
+begin
+  if auth.uid() <> p_rider_id then
+    raise exception 'Not authorized to modify this subscription.';
+  end if;
+
+  select * into v_plan from public.rider_subscription_plans where id = p_plan_id and is_active = true;
+  if not found then
+    raise exception 'Selected plan is not available.';
+  end if;
+
+  select * into v_current from public.rider_subscriptions
+  where rider_id = p_rider_id and status in ('active', 'grace_period')
+  order by expiry_date desc limit 1;
+
+  if found and v_current.status = 'active' and v_current.expiry_date >= current_date then
+    v_start := v_current.expiry_date;
+  else
+    v_start := current_date;
+  end if;
+
+  if found then
+    update public.rider_subscriptions set status = 'cancelled' where id = v_current.id;
+  end if;
+
+  insert into public.rider_subscriptions
+    (rider_id, plan_id, status, start_date, expiry_date, payment_method, payment_reference, paid_at)
+  values
+    (p_rider_id, p_plan_id, 'active', v_start, v_start + v_plan.duration_days, 'upi', p_payment_reference, now())
+  returning * into v_row;
+
+  return v_row;
+exception
+  when unique_violation then
+    raise exception 'This payment reference has already been used. Please check your UPI reference.';
+end;
+$$;
+
+-- Only these functions (or an admin, for a manual comp) can create or
+-- alter a subscription row now — a driver/rider's own session can no
+-- longer write to this table directly at all.
+drop policy if exists "driver_subscriptions_insert_own" on public.driver_subscriptions;
+create policy "driver_subscriptions_admin_insert"
+  on public.driver_subscriptions for insert
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "driver_subscriptions_update_own_or_admin" on public.driver_subscriptions;
+create policy "driver_subscriptions_admin_update"
+  on public.driver_subscriptions for update
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "rider_subscriptions_insert_own" on public.rider_subscriptions;
+create policy "rider_subscriptions_admin_insert"
+  on public.rider_subscriptions for insert
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "rider_subscriptions_update_own_or_admin" on public.rider_subscriptions;
+create policy "rider_subscriptions_admin_update"
+  on public.rider_subscriptions for update
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- Scheduled rides: dispatch every row whose scheduled_at has arrived into
+-- a real ride request, and notify the rider (+ preferred driver, if any).
+create or replace function public.dispatch_due_scheduled_rides()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  sr record;
+  new_ride_id uuid;
+  driver_user_id uuid;
+begin
+  for sr in
+    select * from public.scheduled_rides
+    where status = 'scheduled' and scheduled_at <= now()
+  loop
+    -- Found during the end-to-end regression pass: dispatch_mode was
+    -- never set here, so it silently took the column's default ('direct')
+    -- even for an "Any Driver" scheduled ride (preferred_driver_id null)
+    -- — meaning driver_id was also null, and dispatch_pending_rides only
+    -- ever processes dispatch_mode='auto' rows, so that ride could never
+    -- be matched to anyone, permanently. Confirmed two real rides stuck
+    -- this way since mid-August.
+    insert into public.rides (rider_id, driver_id, dispatch_mode, pickup_address, destination_address, status)
+    values (
+      sr.rider_id, sr.preferred_driver_id,
+      case when sr.preferred_driver_id is null then 'auto' else 'direct' end,
+      sr.pickup_address, sr.destination_address, 'requested'
+    )
+    returning id into new_ride_id;
+
+    update public.scheduled_rides
+    set status = 'dispatched', ride_id = new_ride_id
+    where id = sr.id;
+
+    insert into public.notifications (user_id, category, title, body)
+    values (
+      sr.rider_id, 'ride_alert', 'Scheduled ride starting',
+      'Your scheduled ride to ' || sr.destination_address || ' is now being requested.'
+    );
+
+    if sr.preferred_driver_id is not null then
+      select user_id into driver_user_id from public.driver_profiles where id = sr.preferred_driver_id;
+      if driver_user_id is not null then
+        insert into public.notifications (user_id, category, title, body, data)
+        values (
+          driver_user_id, 'driver_request', 'New ride request',
+          'A rider wants a ride from ' || sr.pickup_address || ' to ' || sr.destination_address || '.',
+          jsonb_build_object('rideId', new_ride_id)
+        );
+      end if;
+    end if;
+  end loop;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'dispatch-due-scheduled-rides';
+select cron.schedule('dispatch-due-scheduled-rides', '* * * * *', $$select public.dispatch_due_scheduled_rides();$$);
+
+-- ============================================================
+-- SCHEDULED RIDE CANCELLATION
+-- cancelScheduledRide (src/lib/family.js) used to just flip
+-- scheduled_rides.status — unlike scheduleRide (which notifies both
+-- requested_by and rider_id when a family member booked for someone
+-- else), nobody found out. Worse: once dispatch_due_scheduled_rides has
+-- already turned a row into a real ride (status 'dispatched', ride_id
+-- set, possibly already offered to or accepted by a driver),
+-- cancelling the scheduled_rides row left that real ride running —
+-- the driver would still show up for a pickup the family had cancelled.
+-- A security-definer function is the only way to fix the second part
+-- at all: whoever scheduled the ride (requested_by) can't necessarily
+-- touch the underlying rides row directly via RLS if it was booked for
+-- a different family member (rides_update_involved only allows the
+-- ride's own rider, its driver, or an admin).
+-- ============================================================
+
+create or replace function public.cancel_scheduled_ride(p_id uuid, p_reason text default 'Cancelled by user')
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  sr public.scheduled_rides;
+  v_ride_driver_id uuid;
+  v_driver_user_id uuid;
+begin
+  select * into sr from public.scheduled_rides where id = p_id;
+  if not found then
+    raise exception 'Scheduled ride not found.';
+  end if;
+  if sr.requested_by <> auth.uid() then
+    raise exception 'Not authorized to cancel this scheduled ride.';
+  end if;
+  if sr.status = 'cancelled' then
+    return;
+  end if;
+
+  update public.scheduled_rides set status = 'cancelled', cancellation_reason = p_reason where id = p_id;
+
+  if sr.rider_id <> sr.requested_by then
+    insert into public.notifications (user_id, category, title, body)
+    values (
+      sr.rider_id, 'ride_alert', 'Scheduled ride cancelled',
+      'Your ride from ' || coalesce(sr.pickup_address, 'pickup') || ' to ' || coalesce(sr.destination_address, 'destination') ||
+        ' scheduled for ' || to_char(sr.scheduled_at at time zone 'Asia/Kolkata', 'DD Mon, HH12:MI AM') || ' was cancelled.'
+    );
+  end if;
+
+  if sr.ride_id is not null then
+    select driver_id into v_ride_driver_id from public.rides
+    where id = sr.ride_id and status not in ('completed', 'cancelled');
+
+    if found then
+      update public.rides
+      set status = 'cancelled', cancellation_reason = p_reason, cancelled_by = auth.uid()
+      where id = sr.ride_id;
+
+      if v_ride_driver_id is not null then
+        select user_id into v_driver_user_id from public.driver_profiles where id = v_ride_driver_id;
+        if v_driver_user_id is not null then
+          insert into public.notifications (user_id, category, title, body)
+          values (
+            v_driver_user_id, 'ride_alert', 'Ride cancelled',
+            'The scheduled ride from ' || coalesce(sr.pickup_address, 'pickup') || ' to ' || coalesce(sr.destination_address, 'destination') || ' was cancelled.'
+          );
+        end if;
+      end if;
+    end if;
+  end if;
+end;
+$$;
+
+-- Scheduled-ride reminders: notify once, ~30 min ahead of the scheduled
+-- time (reminder_sent_at guards against sending the same reminder twice).
+create or replace function public.send_due_scheduled_ride_reminders()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  sr record;
+begin
+  for sr in
+    select * from public.scheduled_rides
+    where status = 'scheduled'
+      and reminder_sent_at is null
+      and scheduled_at > now()
+      and scheduled_at <= now() + interval '30 minutes'
+  loop
+    insert into public.notifications (user_id, category, title, body)
+    values (
+      sr.rider_id, 'ride_alert', 'Upcoming ride reminder',
+      'Your ride to ' || sr.destination_address || ' is scheduled for ' ||
+        to_char(sr.scheduled_at at time zone 'Asia/Kolkata', 'HH12:MI AM') ||
+        ' — pickup at ' || sr.pickup_address || '.'
+    );
+
+    update public.scheduled_rides set reminder_sent_at = now() where id = sr.id;
+  end loop;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'send-scheduled-ride-reminders';
+select cron.schedule('send-scheduled-ride-reminders', '* * * * *', $$select public.send_due_scheduled_ride_reminders();$$);
+
+-- ============================================================
+-- AUTOMATIC DISPATCH / MATCHING ENGINE
+-- ============================================================
+-- Every EXISTING booking path (Preferred Drivers "Request Ride", a
+-- driver's own "Request Ride Now", "Book" from a nearby-driver card)
+-- keeps working exactly as before: they set rides.driver_id at insert
+-- time and are untouched by any of this. dispatch_mode defaults to
+-- 'direct' for every one of them.
+--
+-- This adds a second, new mode: a rider requests a ride with NO driver
+-- chosen (dispatch_mode = 'auto', driver_id = null at insert), and this
+-- cron-driven engine finds and offers it to real candidates — preferred
+-- driver first if one's online, else the nearest eligible online driver
+-- — one at a time, with the existing 30s accept window (now also
+-- enforced server-side, not just by the client's countdown), retrying
+-- with the next candidate on reject/timeout, until one accepts or 5
+-- minutes pass with nobody found.
+
+alter table public.rides add column if not exists dispatch_mode text not null default 'direct' check (dispatch_mode in ('direct', 'auto'));
+alter table public.rides add column if not exists offered_at timestamptz;
+alter table public.rides add column if not exists tried_driver_ids uuid[] not null default '{}';
+alter table public.rides add column if not exists requested_vehicle_type text check (requested_vehicle_type in ('ev_auto', 'ev_car'));
+
+create or replace function public.haversine_km(lat1 numeric, lng1 numeric, lat2 numeric, lng2 numeric)
+returns numeric
+language sql
+immutable
+as $$
+  select 6371 * 2 * asin(sqrt(
+    sin(radians(lat2 - lat1) / 2) ^ 2 +
+    cos(radians(lat1)) * cos(radians(lat2)) * sin(radians(lng2 - lng1) / 2) ^ 2
+  ));
+$$;
+
+-- Simplified server-side port of src/lib/goHome.js's matchGoHomeRide —
+-- just the two hard gates that don't need the driver's live position
+-- (homeward progress, drop-inside-zone), since dispatch only has the
+-- ride's coordinates and the driver's last reported location, not a
+-- full re-run of the client's richer scoring. A driver in Go Home Mode
+-- who's incompatible with a ride is simply never offered it here; their
+-- existing client-side matchGoHomeRide keeps handling the direct-
+-- booking path exactly as it already did, untouched.
+create or replace function public.driver_compatible_with_go_home(
+  p_driver_id uuid, p_destination_lat numeric, p_destination_lng numeric,
+  p_pickup_lat numeric, p_pickup_lng numeric
+)
+returns boolean
+language plpgsql
+stable
+as $$
+declare
+  gh record;
+  gap_drop numeric;
+  gap_pickup numeric;
+begin
+  select * into gh from public.go_home_sessions
+  where driver_id = p_driver_id and status = 'active' and end_time > now()
+  limit 1;
+
+  if gh is null then
+    return true;
+  end if;
+
+  if p_destination_lat is null or p_destination_lng is null then
+    return false;
+  end if;
+
+  gap_drop := public.haversine_km(p_destination_lat, p_destination_lng, gh.home_zone_latitude, gh.home_zone_longitude);
+  if gap_drop > gh.home_zone_radius_km + 2.0 then
+    return false;
+  end if;
+
+  if p_pickup_lat is not null and p_pickup_lng is not null then
+    gap_pickup := public.haversine_km(p_pickup_lat, p_pickup_lng, gh.home_zone_latitude, gh.home_zone_longitude);
+    if (gap_pickup - gap_drop) < 2.0 then
+      return false;
+    end if;
+  end if;
+
+  return true;
+end;
+$$;
+
+create or replace function public.dispatch_pending_rides()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  r record;
+  candidate_id uuid;
+begin
+  -- 1) Offers nobody answered in 30s go back in the pool; remember not
+  --    to re-offer the same driver for this same ride.
+  update public.rides
+  set tried_driver_ids = array_append(tried_driver_ids, driver_id),
+      driver_id = null,
+      offered_at = null
+  where dispatch_mode = 'auto'
+    and status = 'requested'
+    and driver_id is not null
+    and offered_at < now() - interval '30 seconds';
+
+  -- 2) Give up on a search that's found nobody in 5 minutes.
+  update public.rides
+  set status = 'expired'
+  where dispatch_mode = 'auto'
+    and status = 'requested'
+    and driver_id is null
+    and created_at < now() - interval '5 minutes';
+
+  -- 3) Offer every still-searching ride to its best untried candidate.
+  for r in
+    select * from public.rides
+    where dispatch_mode = 'auto' and status = 'requested' and driver_id is null
+  loop
+    candidate_id := null;
+
+    -- Preferred driver gets first refusal, if online/eligible/untried.
+    select dp.id into candidate_id
+    from public.preferred_drivers pd
+    join public.driver_profiles dp on dp.id = pd.driver_id
+    where pd.rider_id = r.rider_id
+      and pd.status = 'active'
+      and dp.status = 'approved'
+      and dp.is_online = true
+      and not (dp.id = any(r.tried_driver_ids))
+      and not exists (select 1 from public.rides x where x.driver_id = dp.id and x.status in ('accepted', 'active'))
+      and exists (
+        select 1 from public.vehicles v where v.driver_id = dp.id and v.is_active
+          and (r.requested_vehicle_type is null or v.vehicle_type = r.requested_vehicle_type)
+      )
+      and public.driver_compatible_with_go_home(dp.id, r.destination_latitude, r.destination_longitude, r.pickup_latitude, r.pickup_longitude)
+    limit 1;
+
+    -- Otherwise, the nearest eligible online driver (unknown location
+    -- sorts last rather than being excluded, same fallback pattern used
+    -- everywhere else real GPS is optional in this app) — but capped to
+    -- 30km when both positions are actually known (same radius the
+    -- client uses in src/lib/drivers.js's NEARBY_MAX_KM). Without this
+    -- cap, a quiet night with nobody online nearby would still hand the
+    -- ride to whoever was furthest away, anywhere, rather than expiring
+    -- the search after 5 minutes like it's supposed to when nobody's
+    -- really around — the exact bug that would silently cross-match a
+    -- rider in one city with a driver in another the moment this app
+    -- serves more than one.
+    if candidate_id is null then
+      select dp.id into candidate_id
+      from public.driver_profiles dp
+      where dp.status = 'approved'
+        and dp.is_online = true
+        and not (dp.id = any(r.tried_driver_ids))
+        and not exists (select 1 from public.rides x where x.driver_id = dp.id and x.status in ('accepted', 'active'))
+        and exists (
+          select 1 from public.vehicles v where v.driver_id = dp.id and v.is_active
+            and (r.requested_vehicle_type is null or v.vehicle_type = r.requested_vehicle_type)
+        )
+        and public.driver_compatible_with_go_home(dp.id, r.destination_latitude, r.destination_longitude, r.pickup_latitude, r.pickup_longitude)
+        and (
+          dp.current_latitude is null or r.pickup_latitude is null
+          or public.haversine_km(dp.current_latitude, dp.current_longitude, r.pickup_latitude, r.pickup_longitude) <= 30
+        )
+      order by
+        case when dp.current_latitude is not null and r.pickup_latitude is not null
+          then public.haversine_km(dp.current_latitude, dp.current_longitude, r.pickup_latitude, r.pickup_longitude)
+          else 999999
+        end asc
+      limit 1;
+    end if;
+
+    if candidate_id is not null then
+      update public.rides
+      set driver_id = candidate_id, offered_at = now()
+      where id = r.id;
+
+      insert into public.notifications (user_id, category, title, body, data)
+      select dp.user_id, 'driver_request', 'New ride request',
+             'A rider wants a ride from ' || coalesce(r.pickup_address, 'their pickup') || ' to ' || coalesce(r.destination_address, 'their destination') || '.',
+             jsonb_build_object('rideId', r.id)
+      from public.driver_profiles dp where dp.id = candidate_id;
+    end if;
+  end loop;
+end;
+$$;
+
+select cron.unschedule(jobid) from cron.job where jobname = 'dispatch-pending-rides';
+select cron.schedule('dispatch-pending-rides', '* * * * *', $$select public.dispatch_pending_rides();$$);
+
+-- ============================================================
+-- REAL KYC REVIEW — storage policies for the kyc-documents bucket
+-- ============================================================
+-- The bucket already exists (private) and DriverVerificationPage has
+-- been uploading real files to it — driver_profiles.kyc_status just had
+-- no policy letting anyone actually READ them back, so "approve" on the
+-- admin dashboard was a rubber stamp with nothing behind it. Files are
+-- stored as "<user_id>/<doc_id>.<ext>", so storage.foldername(name)[1]
+-- is the owning driver's own auth uid — that's the whole access rule.
+--
+-- Also found live during the security audit pass (pg_policies on
+-- storage.objects, checked because rides had just turned up the same
+-- shape of surprise): a policy named "Allow authenticated uploads"
+-- (ALL, qual/with_check = bucket_id = 'kyc-documents' only — no folder
+-- check at all) predating the three below and never captured anywhere
+-- in this file. It silently granted any authenticated user full read/
+-- write/delete on every driver's KYC documents — Aadhar, PAN, license,
+-- EV certification scans. Dropped immediately; verified the fix with a
+-- synthetic text blob into another driver's folder (rejected) and into
+-- the tester's own folder (accepted, then deleted) — never listing or
+-- reading any real document, since this bucket holds real personal ID
+-- data and the earlier KYC review work already established that
+-- boundary.
+drop policy if exists "Allow authenticated uploads" on storage.objects;
+create policy "kyc_documents_insert_own"
+  on storage.objects for insert
+  with check (
+    bucket_id = 'kyc-documents'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+create policy "kyc_documents_update_own"
+  on storage.objects for update
+  using (bucket_id = 'kyc-documents' and (storage.foldername(name))[1] = auth.uid()::text)
+  with check (bucket_id = 'kyc-documents' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "kyc_documents_select_own_or_admin"
+  on storage.objects for select
+  using (
+    bucket_id = 'kyc-documents'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or exists (select 1 from public.users where id = auth.uid() and role = 'admin')
+    )
+  );
+
+-- ============================================================
+-- REAL PRICING ENGINE — admin-editable fare config
+-- ============================================================
+-- src/lib/fare.js had BASE_FARE / PER_KM_RATE / MIN_FARE / ROUTE_FACTOR /
+-- AVG_SPEED_KMH hardcoded as JS constants — the PRD explicitly leaves the
+-- actual fare model undecided, same gap driver/rider subscription pricing
+-- had until subscription_plans.price got made admin-editable. This is the
+-- same fix for ride fares: two tiers (luxe/space) plus one shared row for
+-- the route/traffic assumptions that aren't tier-specific.
+
+create table if not exists public.fare_tiers (
+  tier text primary key check (tier in ('luxe', 'space')),
+  label text not null,
+  base_fare numeric(10,2) not null,
+  per_km_rate numeric(10,2) not null,
+  min_fare numeric(10,2) not null,
+  updated_at timestamptz not null default now()
+);
+insert into public.fare_tiers (tier, label, base_fare, per_km_rate, min_fare) values
+  ('luxe',  'Drivo Luxe (EV Sedan)', 40, 13, 80),
+  ('space', 'Drivo Space (EV SUV)',  40, 18, 110)
+on conflict (tier) do nothing;
+
+create table if not exists public.fare_settings (
+  id int primary key default 1,
+  route_factor numeric(4,2) not null default 1.3,
+  avg_speed_kmh numeric(5,2) not null default 22,
+  updated_at timestamptz not null default now()
+);
+insert into public.fare_settings (id) values (1) on conflict (id) do nothing;
+
+alter table public.fare_tiers enable row level security;
+alter table public.fare_settings enable row level security;
+
+-- Every rider needs to read these to estimate a fare before booking;
+-- only an admin can change them.
+create policy "fare_tiers_select_all" on public.fare_tiers for select using (true);
+create policy "fare_tiers_admin_write" on public.fare_tiers for all
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+create policy "fare_settings_select_all" on public.fare_settings for select using (true);
+create policy "fare_settings_admin_write" on public.fare_settings for all
+  using (exists (select 1 from public.users where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.users where id = auth.uid() and role = 'admin'));
+
+-- ============================================================
+-- CANCELLATION VISIBILITY
+-- A rider cancelling after a driver accepted was previously
+-- indistinguishable from cancelling a still-unmatched request — nothing
+-- recorded when acceptance happened, so admin reporting couldn't tell
+-- "cancelled instantly" from "driver was already on the way." This adds
+-- the one missing timestamp so the app can classify cancellations by
+-- stage (before acceptance / after acceptance / after the ride started)
+-- without changing any existing behavior.
+-- ============================================================
+
+alter table public.rides add column if not exists accepted_at timestamptz;

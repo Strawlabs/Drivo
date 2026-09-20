@@ -3,28 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchDriverEarnings, summarizeForPeriod, bucketTrend, buildEarningsReportCsv, PERIOD_DAYS } from '@/lib/earnings'
-import { HOME_ZONES, validateGoHomeInput, activateGoHome, deactivateGoHome, fetchActiveGoHomeSession, matchGoHomeRide, toLocalDatetimeInputValue } from '@/lib/goHome'
+import { deactivateGoHome, fetchActiveGoHomeSession, matchGoHomeRide } from '@/lib/goHome'
 import { fetchPreferredRidersForDriver, approvePreferredRider, declinePreferredRider, blockPreferredRider } from '@/lib/preferredDrivers'
 import { hasQualifyingTier, checkAndUpdateSubscriptionStatus } from '@/lib/subscriptions'
 import { fetchUnreadCount, subscribeToNotifications } from '@/lib/notifications'
-
-// ── Mock data ──────────────────────────────────────────────────
-const DISCOVERY_DRIVERS = [
-  { id: 1, name: 'Marcus Thorne',   rating: 4.98, vehicle: 'Tesla Model S',  status: 'available', preferred: true,  avatar: 'MT' },
-  { id: 2, name: 'Elena Rodriguez', rating: 4.92, vehicle: 'Lucid Air Pure', status: 'available', preferred: false, eta: '5m', avatar: 'ER' },
-  { id: 3, name: 'Sarah Jenkins',   rating: 5.00, vehicle: 'Rivian R1S',     status: 'on_ride',   preferred: true,  avatar: 'SJ' },
-  { id: 4, name: 'Arjun Mehta',     rating: 4.87, vehicle: 'BYD Atto 3',    status: 'available', preferred: false, eta: '8m', avatar: 'AM' },
-]
-
-const FAMILY_MEMBERS = [
-  { id: 1, name: 'Sarah',  relation: 'Daughter', status: 'Last ride: 2 hours ago', safe: true,  location: null,          avatar: 'SA' },
-  { id: 2, name: 'Lucas',  relation: 'Son',      status: 'Currently at: Home',      safe: true,  location: 'Home',        avatar: 'LU' },
-]
-
-const SCHEDULED_RIDES = [
-  { time: '08:30 AM', label: 'Gymnastics Practice', sub: 'Pick up: Lucas · EV Luxury' },
-  { time: '05:00 PM', label: 'Family Dinner',        sub: 'Pick up: Sarah · Standard EV' },
-]
+import { fetchAvailableDrivers } from '@/lib/drivers'
+import { useDriverLocation } from '@/hooks/useDriverLocation'
+import RealMap from '@/components/RealMap'
 
 // ── Shared ─────────────────────────────────────────────────────
 function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
@@ -35,193 +20,267 @@ function Avatar({ initials, size = 48, bg = 'var(--color-primary)' }) {
   )
 }
 
-function StarIcon() {
+function StarIcon({ size = 13, color = '#F59E0B' }) {
   return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="#F59E0B">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
     </svg>
   )
 }
 
-// ── TAB: Home ───────────────────────────────────────────────────
-function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome, onOpenPreferredRiders, onOpenEarnings, onOpenSubscription }) {
+// Replaces the Home tab's emoji icons (⏻ 🚗 💚 🎖️ 📍 💰 ⚡) with hand-drawn
+// line icons matching this app's SVG conventions elsewhere, instead of the
+// mismatched emoji-cartoon look.
+function PowerIcon({ size = 22, color = 'currentColor' }) {
   return (
-    <main className="mx-auto px-5 pb-32" style={{ maxWidth: 480, paddingTop: 24 }}>
-      {/* Status Hero */}
-      <section className="mb-8 text-center">
-        <h1 style={{ fontSize: 40, fontWeight: 700, lineHeight: '48px', letterSpacing: '-0.02em', color: 'var(--color-on-background)', marginBottom: 4 }}>
-          {greeting}, {displayName}
-        </h1>
-        <p style={{ fontSize: 16, color: 'var(--color-secondary)', marginBottom: 24 }}>
-          Ready for a green commute today?
-        </p>
-        <div style={{ background: '#ffffff', borderRadius: 9999, padding: 8, boxShadow: '0px 4px 20px rgba(26,43,60,0.05)', border: isOnline ? '1px solid var(--color-primary)' : '1px solid #f1f5f9', transition: 'border 0.3s ease' }}>
-          <button
-            onClick={onToggle}
-            disabled={toggling}
-            className="flex items-center justify-center gap-3 w-full"
-            style={{ height: 56, borderRadius: 9999, border: 'none', background: isOnline ? 'var(--color-error)' : 'var(--color-primary)', color: '#ffffff', fontSize: 16, fontWeight: 600, cursor: toggling ? 'not-allowed' : 'pointer', opacity: toggling ? 0.7 : 1, transition: 'background 0.3s ease' }}
-          >
-            <span style={{ fontSize: 22 }}>⏻</span>
-            {toggling ? 'Updating…' : isOnline ? 'Go Offline' : 'Go Online'}
-          </button>
-        </div>
-      </section>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round">
+      <path d="M12 3v8"/>
+      <path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>
+    </svg>
+  )
+}
 
-      {/* Stats Bento */}
-      <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 32 }}>
-        <div style={{ gridColumn: 'span 2', background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', position: 'relative', overflow: 'hidden' }}>
-          <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Today's Earnings</p>
-          <h2 style={{ fontSize: 40, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--color-primary)', lineHeight: '48px' }}>₹{todayEarnings.toFixed(2)}</h2>
-          <div className="flex items-center gap-1" style={{ marginTop: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-secondary)', letterSpacing: '0.05em' }}>
-              {todayTripsCount} {todayTripsCount === 1 ? 'ride' : 'rides'} paid today
+function CarIcon({ size = 22, color = 'var(--color-primary)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 13l1.5-4.5A2 2 0 0 1 6.4 7h11.2a2 2 0 0 1 1.9 1.5L21 13"/>
+      <rect x="2" y="13" width="20" height="5" rx="2"/>
+      <circle cx="7" cy="18" r="1.6"/>
+      <circle cx="17" cy="18" r="1.6"/>
+    </svg>
+  )
+}
+
+function HeartIcon({ size = 22, color = 'var(--color-primary)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21.2l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/>
+    </svg>
+  )
+}
+
+function MedalIcon({ size = 22, color = 'var(--color-primary)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="15" r="6"/>
+      <path d="M9 3l3 5 3-5M9 3H6l2.5 6M15 3h3l-2.5 6"/>
+      <path d="M12 12v3l2 1.5"/>
+    </svg>
+  )
+}
+
+function PinIcon({ size = 22, color = 'var(--color-on-secondary-container)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 21s7-7.4 7-12a7 7 0 1 0-14 0c0 4.6 7 12 7 12z"/>
+      <circle cx="12" cy="9" r="2.4"/>
+    </svg>
+  )
+}
+
+function WalletIcon({ size = 22, color = 'var(--color-on-secondary-container)' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="6" width="18" height="13" rx="2"/>
+      <path d="M3 10h18"/>
+      <circle cx="16.5" cy="14.5" r="1.2" fill={color} stroke="none"/>
+    </svg>
+  )
+}
+
+function BoltIcon({ size = 18, color = 'white' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/>
+    </svg>
+  )
+}
+
+// ── TAB: Home ───────────────────────────────────────────────────
+function HomeTab({ displayName, greeting, isOnline, toggling, onToggle, vehicle, todayEarnings, todayTripsCount, driverRating, preferredRidersCount, subscription, goHomeSession, onOpenGoHome, onOpenPreferredRiders, onOpenEarnings, onOpenSubscription, liveLocation }) {
+  return (
+    <main className="mx-auto px-5 pb-32" style={{ maxWidth: 1100, paddingTop: 24 }}>
+      {/* Desktop-only 2-column split (Quick Actions + Map move into a side
+          rail) — grid only turns on at the lg breakpoint, so phones/narrow
+          viewports render this exactly as before, in source order. */}
+      <div className="lg:grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 320px', columnGap: 24, gridAutoFlow: 'row dense' }}>
+        {/* Status Hero */}
+        <section className="mb-8 text-center" style={{ gridColumn: 1 }}>
+          <h1 style={{ fontSize: 40, fontWeight: 700, lineHeight: '48px', letterSpacing: '-0.02em', color: 'var(--color-on-background)', marginBottom: 4 }}>
+            {greeting}, {displayName}
+          </h1>
+          <p style={{ fontSize: 16, color: 'var(--color-secondary)', marginBottom: 24 }}>
+            Ready for a green commute today?
+          </p>
+          <div style={{ background: '#ffffff', borderRadius: 9999, padding: 8, boxShadow: '0px 4px 20px rgba(26,43,60,0.05)', border: isOnline ? '1px solid var(--color-primary)' : '1px solid #f1f5f9', transition: 'border 0.3s ease' }}>
+            <button
+              onClick={onToggle}
+              disabled={toggling}
+              className="flex items-center justify-center gap-3 w-full"
+              style={{ height: 56, borderRadius: 9999, border: 'none', background: isOnline ? 'var(--color-error)' : 'var(--color-primary)', color: '#ffffff', fontSize: 16, fontWeight: 600, cursor: toggling ? 'not-allowed' : 'pointer', opacity: toggling ? 0.7 : 1, transition: 'background 0.3s ease' }}
+            >
+              <PowerIcon size={22} color="#ffffff" />
+              {toggling ? 'Updating…' : isOnline ? 'Go Offline' : 'Go Online'}
+            </button>
+          </div>
+        </section>
+
+        {/* Stats Bento */}
+        <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 32, gridColumn: 1 }}>
+          <div style={{ gridColumn: 'span 2', background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', position: 'relative', overflow: 'hidden' }}>
+            <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>Today's Earnings</p>
+            <h2 style={{ fontSize: 40, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--color-primary)', lineHeight: '48px' }}>₹{todayEarnings.toFixed(2)}</h2>
+            <div className="flex items-center gap-1" style={{ marginTop: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-secondary)', letterSpacing: '0.05em' }}>
+                {todayTripsCount} {todayTripsCount === 1 ? 'ride' : 'rides'} paid today
+              </span>
+            </div>
+            <div style={{ position: 'absolute', right: -32, bottom: -32, width: 128, height: 128, background: 'rgba(0,109,55,0.05)', borderRadius: '50%', filter: 'blur(24px)' }} />
+          </div>
+          {[
+            { Icon: CarIcon,   label: 'Trips',            value: String(todayTripsCount) },
+            { Icon: StarIcon,  label: 'Rating',            value: Number(driverRating).toFixed(2) },
+            { Icon: HeartIcon, label: 'Preferred Riders',  value: String(preferredRidersCount), onClick: onOpenPreferredRiders },
+            { Icon: MedalIcon, label: 'Subscription',      value: subscription?.subscription_plans?.name
+                ? subscription.subscription_plans.name.charAt(0).toUpperCase() + subscription.subscription_plans.name.slice(1)
+                : 'None' },
+          ].map(({ Icon, label, value, onClick }) => (
+            <div key={label} onClick={onClick} style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', cursor: onClick ? 'pointer' : 'default' }}>
+              <div style={{ marginBottom: 4 }}><Icon size={22} /></div>
+              <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>{label}</p>
+              <h3 style={{ fontSize: 24, fontWeight: 600, color: 'var(--color-on-surface)' }}>{value}</h3>
+            </div>
+          ))}
+        </section>
+
+        {/* Quick Actions */}
+        <div style={{ gridColumn: 2 }}>
+          <p style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 12 }}>Quick Actions</p>
+          <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 32 }}>
+            {[{ label: 'Go Home', Icon: PinIcon, onClick: onOpenGoHome }, { label: 'Earnings', Icon: WalletIcon, onClick: onOpenEarnings }, { label: 'Drivo+', Icon: MedalIcon, onClick: onOpenSubscription }].map(({ label, Icon, onClick }) => (
+              <button key={label} onClick={onClick} className="flex flex-col items-center gap-2" style={{ padding: 16, borderRadius: 12, border: 'none', background: 'transparent', cursor: onClick ? 'pointer' : 'default', transition: 'background 0.15s ease', position: 'relative' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--color-surface-container)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <div style={{ width: 56, height: 56, background: 'var(--color-secondary-container)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                  <Icon size={22} />
+                  {label === 'Go Home' && goHomeSession && (
+                    <span style={{ position: 'absolute', top: -2, right: -2, width: 12, height: 12, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid white' }} />
+                  )}
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-on-surface)', textAlign: 'center' }}>{label}</span>
+              </button>
+            ))}
+          </section>
+        </div>
+
+        {/* Map */}
+        <section style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(26,43,60,0.06)', gridColumn: 2 }}>
+          <div className="flex justify-between items-center" style={{ padding: '12px 16px', borderBottom: '1px solid #f1f5f9' }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)' }}>Near You</span>
+            <span className="flex items-center gap-1.5" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-primary)' }}>
+              High Demand
+              <span style={{ width: 8, height: 8, background: 'var(--color-primary-container)', borderRadius: '50%', display: 'inline-block', animation: 'mapPulse 2s infinite' }} />
             </span>
           </div>
-          <div style={{ position: 'absolute', right: -32, bottom: -32, width: 128, height: 128, background: 'rgba(0,109,55,0.05)', borderRadius: '50%', filter: 'blur(24px)' }} />
-        </div>
-        {[
-          { icon: '🚗', label: 'Trips',            value: String(todayTripsCount) },
-          { icon: '⭐', label: 'Rating',            value: Number(driverRating).toFixed(2) },
-          { icon: '💚', label: 'Preferred Riders',  value: String(preferredRidersCount), onClick: onOpenPreferredRiders },
-          { icon: '🎖️', label: 'Subscription',      value: subscription?.subscription_plans?.name
-              ? subscription.subscription_plans.name.charAt(0).toUpperCase() + subscription.subscription_plans.name.slice(1)
-              : 'None' },
-        ].map(({ icon, label, value, onClick }) => (
-          <div key={label} onClick={onClick} style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', cursor: onClick ? 'pointer' : 'default' }}>
-            <span style={{ fontSize: 22, marginBottom: 4 }}>{icon}</span>
-            <p style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 4 }}>{label}</p>
-            <h3 style={{ fontSize: 24, fontWeight: 600, color: 'var(--color-on-surface)' }}>{value}</h3>
+          <div style={{ height: 160, position: 'relative' }}>
+            <RealMap
+              center={liveLocation ? [liveLocation.lat, liveLocation.lng] : [12.9611, 77.6387]}
+              zoom={liveLocation ? 14 : 12}
+              interactive={false}
+              markers={liveLocation ? [{ id: 'me', type: 'car', color: 'var(--color-primary)', position: [liveLocation.lat, liveLocation.lng] }] : []}
+            />
+            {/* Placeholder pulse only while a real GPS fix hasn't come in yet
+                (or the driver is offline) — once liveLocation exists, the
+                real marker above replaces it. */}
+            {!liveLocation && (
+              <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 40, height: 40, background: 'var(--color-primary)', border: '2px solid white', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'carPulse 2s infinite', boxShadow: '0 2px 10px rgba(0,0,0,0.35)' }}>
+                <BoltIcon size={18} />
+              </div>
+            )}
           </div>
-        ))}
-      </section>
-
-      {/* Quick Actions */}
-      <p style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--color-secondary)', textTransform: 'uppercase', marginBottom: 12 }}>Quick Actions</p>
-      <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 32 }}>
-        {[{ label: 'Go Home', icon: '📍', onClick: onOpenGoHome }, { label: 'Earnings', icon: '💰', onClick: onOpenEarnings }, { label: 'Drivo+', icon: '🎖️', onClick: onOpenSubscription }].map(({ label, icon, onClick }) => (
-          <button key={label} onClick={onClick} className="flex flex-col items-center gap-2" style={{ padding: 16, borderRadius: 12, border: 'none', background: 'transparent', cursor: onClick ? 'pointer' : 'default', transition: 'background 0.15s ease', position: 'relative' }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--color-surface-container)'}
-            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-          >
-            <div style={{ width: 56, height: 56, background: 'var(--color-secondary-container)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, position: 'relative' }}>
-              {icon}
-              {label === 'Go Home' && goHomeSession && (
-                <span style={{ position: 'absolute', top: -2, right: -2, width: 12, height: 12, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid white' }} />
-              )}
-            </div>
-            <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-on-surface)', textAlign: 'center' }}>{label}</span>
-          </button>
-        ))}
-      </section>
-
-      {/* Map */}
-      <section style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid #f1f5f9', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(26,43,60,0.06)' }}>
-        <div className="flex justify-between items-center" style={{ padding: '12px 16px', borderBottom: '1px solid #f1f5f9' }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)' }}>Near You</span>
-          <span className="flex items-center gap-1.5" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.05em', color: 'var(--color-primary)' }}>
-            High Demand
-            <span style={{ width: 8, height: 8, background: 'var(--color-primary-container)', borderRadius: '50%', display: 'inline-block', animation: 'mapPulse 2s infinite' }} />
-          </span>
-        </div>
-        <div style={{ height: 160, position: 'relative', background: 'linear-gradient(135deg, #e8ecef 0%, #d4dce8 100%)' }}>
-          {[20, 40, 60, 80].map(p => <div key={`h${p}`} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(100,116,139,0.2)' }} />)}
-          {[15, 30, 50, 65, 80].map(p => <div key={`v${p}`} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(100,116,139,0.2)' }} />)}
-          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 40, height: 40, background: 'var(--color-primary)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 18, animation: 'carPulse 2s infinite' }}>⚡</div>
-        </div>
-      </section>
+        </section>
+      </div>
     </main>
   )
 }
 
 // ── TAB: Discovery ──────────────────────────────────────────────
-function DiscoveryTab() {
-  const [filter, setFilter] = useState('EV Auto')
-  const filters = ['EV Auto', 'EV Car', 'Distance']
+// A driver can't "request a ride" from another driver — Drivo has no
+// driver-to-driver booking. This used to be a copy of the rider
+// Discovery screen with hardcoded fake names and that same Request
+// Ride action, which made no sense for a driver account. Kept the
+// same visual shape (riders benefit from seeing this list exists) but
+// now shows real online drivers, purely informational.
+function DiscoveryTab({ driverProfileId, liveLocation }) {
+  const [filter, setFilter] = useState('all')
+  const [drivers, setDrivers] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!driverProfileId) return
+    fetchAvailableDrivers({ excludeDriverId: driverProfileId, origin: liveLocation })
+      .then(setDrivers)
+      .catch(() => setDrivers([]))
+      .finally(() => setLoading(false))
+  }, [driverProfileId, liveLocation])
+
+  const filtered = filter === 'all' ? drivers : drivers.filter(d => d.vehicleType === filter)
 
   return (
     <div className="px-5 pt-6 pb-8">
-      <div className="flex justify-between items-start mb-2">
-        <div>
-          <h2 style={{ fontSize: 26, fontWeight: 700, color: 'var(--color-on-surface)' }}>Discovery</h2>
-          <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginTop: 2 }}>Find premium EV certified drivers near you</p>
-        </div>
-        <div className="flex gap-2">
-          {['List', 'Map'].map(v => (
-            <button key={v} style={{ padding: '6px 14px', borderRadius: 9999, border: 'none', background: v === 'List' ? 'var(--color-primary)' : 'var(--color-surface-container)', color: v === 'List' ? 'white' : 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{v}</button>
-          ))}
-        </div>
-      </div>
+      <h2 style={{ fontSize: 26, fontWeight: 700, color: 'var(--color-on-surface)' }}>Discovery</h2>
+      <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginTop: 2, marginBottom: 16 }}>Other Drivo drivers online near you right now</p>
 
       {/* Filter chips */}
-      <div className="flex gap-2 mb-6 mt-4" style={{ overflowX: 'auto', scrollbarWidth: 'none' }}>
-        {filters.map(f => (
-          <button key={f} onClick={() => setFilter(f)} style={{ padding: '6px 16px', borderRadius: 9999, border: `1px solid ${filter === f ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: filter === f ? 'rgba(0,109,55,0.08)' : 'white', color: filter === f ? 'var(--color-primary)' : 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
-            {f === 'EV Auto' ? '🛺 ' : f === 'EV Car' ? '🚗 ' : '📍 '}{f}
+      <div className="flex gap-2 mb-6" style={{ overflowX: 'auto', scrollbarWidth: 'none' }}>
+        {[{ id: 'all', label: 'All', icon: '' }, { id: 'ev_auto', label: 'EV Auto', icon: '🛺 ' }, { id: 'ev_car', label: 'EV Car', icon: '🚗 ' }].map(f => (
+          <button key={f.id} onClick={() => setFilter(f.id)} style={{ padding: '6px 16px', borderRadius: 9999, border: `1px solid ${filter === f.id ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: filter === f.id ? 'rgba(0,109,55,0.08)' : 'white', color: filter === f.id ? 'var(--color-primary)' : 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {f.icon}{f.label}
           </button>
         ))}
       </div>
 
       {/* Driver list */}
       <div className="flex flex-col gap-3 mb-6">
-        {DISCOVERY_DRIVERS.map(driver => (
+        {loading && <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>Loading…</p>}
+        {!loading && filtered.length === 0 && (
+          <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>No other drivers online right now.</p>
+        )}
+        {filtered.map(driver => (
           <div key={driver.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.07)', border: '1px solid rgba(187,203,187,0.3)' }}>
-            <div className="flex items-center gap-3 mb-3">
+            <div className="flex items-center gap-3">
               <Avatar initials={driver.avatar} size={52} />
               <div style={{ flex: 1 }}>
                 <div className="flex items-center gap-2">
                   <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.name}</p>
-                  {driver.preferred && (
-                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--color-primary)', background: 'rgba(0,109,55,0.1)', padding: '2px 7px', borderRadius: 9999 }}>PREFERRED</span>
+                  {driver.isPriority && (
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: '#b45309', background: 'rgba(245,158,11,0.14)', padding: '2px 7px', borderRadius: 9999 }}>⭐ ELITE</span>
                   )}
                 </div>
                 <div className="flex items-center gap-1 mt-0.5">
                   <StarIcon />
                   <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>{driver.rating}</span>
-                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.vehicle}</span>
+                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>· {driver.type}</span>
                 </div>
                 <div className="flex items-center gap-1.5 mt-1">
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: driver.status === 'available' ? 'var(--color-primary)' : '#F59E0B', display: 'inline-block', flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>
-                    {driver.status === 'available' ? (driver.eta ? `Available in ${driver.eta}` : 'Available Now') : 'Currently on ride'}
-                  </span>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-primary)', display: 'inline-block', flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{driver.distanceKm != null ? `${driver.distanceKm} km away` : 'Online now'}</span>
                 </div>
               </div>
-              <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: 'var(--color-secondary)' }}>♡</button>
-            </div>
-            <div className="flex gap-2">
-              <button style={{ flex: 1, height: 40, background: 'white', border: '1px solid var(--color-outline-variant)', borderRadius: 9999, fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', cursor: 'pointer' }}>View Profile</button>
-              <button disabled={driver.status === 'on_ride'} style={{ flex: 1, height: 40, background: driver.status === 'on_ride' ? 'var(--color-surface-container)' : 'var(--color-on-surface)', border: 'none', borderRadius: 9999, fontSize: 13, fontWeight: 600, color: driver.status === 'on_ride' ? 'var(--color-secondary)' : 'white', cursor: driver.status === 'on_ride' ? 'default' : 'pointer' }}>
-                {driver.status === 'on_ride' ? 'On Ride' : 'Request Ride'}
-              </button>
             </div>
           </div>
         ))}
       </div>
 
       {/* Drivo Guarantee */}
-      <div style={{ background: 'rgba(0,109,55,0.06)', border: '1px solid rgba(0,109,55,0.2)', borderRadius: 16, padding: 16, marginBottom: 16 }}>
+      <div style={{ background: 'rgba(0,109,55,0.06)', border: '1px solid rgba(0,109,55,0.2)', borderRadius: 16, padding: 16 }}>
         <div className="flex items-center gap-2 mb-2">
           <span style={{ fontSize: 18 }}>🛡️</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-primary)', letterSpacing: '0.05em' }}>DRIVO GUARANTEE</span>
         </div>
         <p style={{ fontSize: 13, color: 'var(--color-on-surface-variant)', lineHeight: '20px' }}>Every driver in the Drivo network is 100% EV certified and undergoes rigorous hospitality training for a premium experience.</p>
       </div>
-
-      {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-        {[{ value: '1.2k', label: 'kg CO₂ Saved Today', icon: '🌿' }, { value: '142', label: 'Active EV', icon: '⚡' }].map(({ value, label, icon }) => (
-          <div key={label} style={{ background: 'white', borderRadius: 14, padding: 16, boxShadow: '0 1px 4px rgba(26,43,60,0.06)', textAlign: 'center' }}>
-            <span style={{ fontSize: 22 }}>{icon}</span>
-            <p style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)', marginTop: 4 }}>{value}</p>
-            <p style={{ fontSize: 11, color: 'var(--color-secondary)', marginTop: 2 }}>{label}</p>
-          </div>
-        ))}
-      </div>
-
-      <button style={{ width: '100%', height: 50, background: 'var(--color-on-surface)', color: 'white', borderRadius: 9999, border: 'none', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-        🗺️ Explore Map View
-      </button>
     </div>
   )
 }
@@ -365,116 +424,32 @@ function RidesTab({ driverProfileId }) {
 }
 
 // ── TAB: Family ─────────────────────────────────────────────────
-function FamilyTab() {
+// Family Rides (adding members, scheduling, safety-net monitoring) was
+// a deliberate rider-only feature (see the Family Rides task) — a
+// driver account has no family_accounts row of its own. This tab used
+// to fabricate an entire fake household (member names, a fake partner
+// phone number, fake scheduled rides) to fill the space instead of
+// saying so. Replaced with an honest explanation and a pointer to the
+// one real, driver-relevant thing that lives near this concept:
+// Preferred Riders, already on the Home tab.
+function FamilyTab({ onOpenPreferredRiders }) {
   return (
-    <div className="pb-8">
-      <div className="px-5 pt-6 mb-6">
-        <h2 style={{ fontSize: 26, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 4 }}>Family Dashboard</h2>
-        <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginBottom: 16 }}>Keep your loved ones safe and coordinated.</p>
-        <button style={{ width: '100%', height: 48, background: 'var(--color-primary)', color: 'white', borderRadius: 9999, border: 'none', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-          👥 Add Family Member
+    <div className="px-5 pt-6 pb-8">
+      <h2 style={{ fontSize: 26, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 4 }}>Family</h2>
+      <p style={{ fontSize: 14, color: 'var(--color-secondary)', marginBottom: 24 }}>Coordinating rides and safety for a household is a rider account feature.</p>
+
+      <div style={{ background: 'white', borderRadius: 16, padding: 24, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', border: '1px solid rgba(187,203,187,0.3)', textAlign: 'center' }}>
+        <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'var(--color-surface-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+          <span style={{ fontSize: 26 }}>👨‍👩‍👧</span>
+        </div>
+        <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-on-surface)', marginBottom: 8 }}>Not available for driver accounts</p>
+        <p style={{ fontSize: 13, color: 'var(--color-secondary)', lineHeight: 1.5, marginBottom: 20 }}>
+          Adding family members, monitoring their rides, and scheduling ahead is something riders set up from their own account. If someone in your household rides with Drivo, they can add you there directly.
+        </p>
+        <button onClick={onOpenPreferredRiders}
+          style={{ width: '100%', height: 44, background: 'var(--color-primary-container)', color: 'var(--color-on-primary-container)', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+          See riders who've saved you as preferred
         </button>
-      </div>
-
-      {/* Live ride map */}
-      <div style={{ position: 'relative', height: 180, background: 'linear-gradient(135deg, #0f1923 0%, #1a2b1a 50%, #0b1c30 100%)', marginBottom: 20 }}>
-        {[20, 40, 60, 80].map(p => <div key={p} style={{ position: 'absolute', top: `${p}%`, left: 0, right: 0, height: 1, background: 'rgba(46,204,113,0.1)' }} />)}
-        {[20, 40, 60, 80].map(p => <div key={p} style={{ position: 'absolute', left: `${p}%`, top: 0, bottom: 0, width: 1, background: 'rgba(46,204,113,0.1)' }} />)}
-        <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} viewBox="0 0 360 180" preserveAspectRatio="none">
-          <path d="M60 140 Q120 80 200 90 Q260 100 300 50" stroke="#2ecc71" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.7"/>
-          <circle cx="60" cy="140" r="5" fill="#2ecc71"/>
-          <circle cx="300" cy="50" r="6" fill="#4ae183"/>
-          <circle cx="300" cy="50" r="12" fill="none" stroke="#4ae183" strokeWidth="1.5" opacity="0.4"/>
-        </svg>
-        {/* Live chip */}
-        <div style={{ position: 'absolute', top: 12, left: 12, background: 'var(--color-primary)', color: 'white', borderRadius: 9999, padding: '4px 10px', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'white', display: 'inline-block', animation: 'livePulse 2s infinite' }} />
-          Live Now: Sarah's Ride
-        </div>
-        {/* Destination */}
-        <div style={{ position: 'absolute', bottom: 16, left: 16, right: 16, display: 'flex', justifyContent: 'space-between' }}>
-          <div>
-            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', marginBottom: 2 }}>Destination</p>
-            <p style={{ fontSize: 18, fontWeight: 700, color: 'white' }}>Highland Academy</p>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', marginBottom: 2 }}>Arrival</p>
-            <p style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-primary)' }}>4:12 PM</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-5">
-        {/* Family members */}
-        <div className="flex flex-col gap-3 mb-6">
-          {FAMILY_MEMBERS.map(member => (
-            <div key={member.id} style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', border: '1px solid rgba(187,203,187,0.3)' }}>
-              <div className="flex items-center gap-3">
-                <div style={{ position: 'relative' }}>
-                  <Avatar initials={member.avatar} size={48} bg={member.id === 1 ? 'var(--color-primary)' : '#6366F1'} />
-                  {member.safe && (
-                    <div style={{ position: 'absolute', bottom: 0, right: 0, width: 16, height: 16, borderRadius: '50%', background: 'var(--color-primary)', border: '2px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </div>
-                  )}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div className="flex justify-between items-center">
-                    <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-on-surface)' }}>{member.name}</p>
-                    <span style={{ fontSize: 18 }}>🛡️</span>
-                  </div>
-                  <p style={{ fontSize: 12, color: 'var(--color-secondary)', marginTop: 2 }}>{member.relation}</p>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <span style={{ fontSize: 12 }}>📍</span>
-                    <span style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{member.status}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Safety Net */}
-        <div style={{ background: 'white', borderRadius: 16, padding: 16, boxShadow: '0 1px 6px rgba(26,43,60,0.06)', marginBottom: 20 }}>
-          <div className="flex justify-between items-center mb-4">
-            <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-on-surface)' }}>Safety Net</p>
-            <span style={{ fontSize: 20 }}>📡</span>
-          </div>
-          {[
-            { initials: 'EM', name: 'Emma (Partner)', sub: '+1 (555) 012-3456', action: '📞', bg: '#8B5CF6' },
-            { initials: 'DS', name: 'Drivo Support',  sub: 'Emergency 24/7',   action: '🛡️', bg: 'var(--color-primary)' },
-          ].map(({ initials, name, sub, action, bg }) => (
-            <div key={name} className="flex items-center gap-3 mb-3">
-              <Avatar initials={initials} size={40} bg={bg} />
-              <div style={{ flex: 1 }}>
-                <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-on-surface)' }}>{name}</p>
-                <p style={{ fontSize: 12, color: 'var(--color-secondary)' }}>{sub}</p>
-              </div>
-              <span style={{ fontSize: 22, cursor: 'pointer' }}>{action}</span>
-            </div>
-          ))}
-          <button style={{ width: '100%', height: 40, background: 'none', border: '1.5px dashed var(--color-outline-variant)', borderRadius: 10, fontSize: 13, fontWeight: 600, color: 'var(--color-secondary)', cursor: 'pointer', marginTop: 4 }}>
-            + Edit Contacts
-          </button>
-        </div>
-
-        {/* Scheduled rides */}
-        <div style={{ background: 'var(--color-on-surface)', borderRadius: 16, padding: 16 }}>
-          <p style={{ fontSize: 14, fontWeight: 700, color: 'rgba(255,255,255,0.6)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 14 }}>Scheduled for Tomorrow</p>
-          {SCHEDULED_RIDES.map(({ time, label, sub }, i) => (
-            <div key={i} className="flex gap-4" style={{ marginBottom: i < SCHEDULED_RIDES.length - 1 ? 16 : 0 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                <div style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid var(--color-primary)', background: 'transparent', flexShrink: 0 }} />
-                {i < SCHEDULED_RIDES.length - 1 && <div style={{ width: 2, height: 32, background: 'rgba(255,255,255,0.15)' }} />}
-              </div>
-              <div>
-                <p style={{ fontSize: 14, fontWeight: 700, color: 'white' }}>{time}</p>
-                <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.85)', marginTop: 1 }}>{label}</p>
-                <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 1 }}>{sub}</p>
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   )
@@ -573,121 +548,6 @@ function PreferredRidersModal({ driverProfileId, onClose, onCountChange, onOpenS
   )
 }
 
-// ── Go Home Mode ─────────────────────────────────────────────────
-function GoHomeModal({ session, driverProfileId, onClose, onActivated, onDeactivated }) {
-  const [zoneName, setZoneName] = useState(session?.preferred_route?.zone_name ?? HOME_ZONES[0].name)
-  const [radiusKm, setRadiusKm] = useState(session?.home_zone_radius_km ?? 3)
-  const [endTime, setEndTime] = useState(() => {
-    if (session?.end_time) return toLocalDatetimeInputValue(new Date(session.end_time))
-    return toLocalDatetimeInputValue(new Date(Date.now() + 2 * 60 * 60 * 1000))
-  })
-  const [note, setNote] = useState(session?.preferred_route?.note ?? '')
-  const [error, setError] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const [now, setNow] = useState(Date.now())
-
-  useEffect(() => {
-    if (!session) return
-    const t = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(t)
-  }, [session])
-
-  async function handleActivate() {
-    setError(null)
-    const validationError = validateGoHomeInput({ zoneName, radiusKm: Number(radiusKm), endTime })
-    if (validationError) { setError(validationError); return }
-    setBusy(true)
-    try {
-      const newSession = await activateGoHome({ driverId: driverProfileId, zoneName, radiusKm: Number(radiusKm), endTime, note })
-      onActivated(newSession)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleDeactivate() {
-    setBusy(true)
-    try {
-      await deactivateGoHome(session.id, 'cancelled')
-      onDeactivated()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const msLeft = session ? new Date(session.end_time).getTime() - now : 0
-  const minsLeft = Math.max(0, Math.floor(msLeft / 60000))
-  const hoursLeft = Math.floor(minsLeft / 60)
-
-  return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(11,28,48,0.6)', backdropFilter: 'blur(4px)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201, background: 'var(--color-surface)', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 20px 40px', boxShadow: '0 -10px 40px rgba(26,43,60,0.2)', maxHeight: '85vh', overflowY: 'auto' }}>
-        <div style={{ width: 40, height: 4, background: 'var(--color-outline-variant)', borderRadius: 2, margin: '0 auto 20px' }} />
-        <div className="flex items-center justify-between mb-4">
-          <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-on-surface)' }}>📍 Go Home Mode</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-secondary)' }}>✕</button>
-        </div>
-
-        {session ? (
-          <div className="flex flex-col gap-4">
-            <div style={{ background: 'rgba(0,109,55,0.08)', border: '1px solid rgba(0,109,55,0.25)', borderRadius: 14, padding: 16 }}>
-              <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-primary)', marginBottom: 4 }}>ACTIVE — heading toward {session.preferred_route?.zone_name}</p>
-              <p style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>Radius: {session.home_zone_radius_km} km · Ends in {hoursLeft > 0 ? `${hoursLeft}h ` : ''}{minsLeft % 60}m</p>
-              {session.preferred_route?.note && <p style={{ fontSize: 12, color: 'var(--color-secondary)', marginTop: 6 }}>Note: {session.preferred_route.note}</p>}
-            </div>
-            <p style={{ fontSize: 13, color: 'var(--color-secondary)' }}>
-              You'll get priority alerts for ride requests heading toward this area. Requests that aren't on your way home won't be shown while this is active.
-            </p>
-            <button onClick={handleDeactivate} disabled={busy}
-              style={{ width: '100%', height: 48, background: 'var(--color-error-container)', color: 'var(--color-error)', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
-              {busy ? 'Ending…' : 'End Go Home Mode'}
-            </button>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {error && (
-              <p style={{ fontSize: 13, color: 'var(--color-error)', background: 'var(--color-error-container)', borderRadius: 10, padding: '8px 12px' }}>{error}</p>
-            )}
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>Home area</label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
-                {HOME_ZONES.map(z => (
-                  <button key={z.name} onClick={() => setZoneName(z.name)}
-                    style={{ height: 40, borderRadius: 10, border: `2px solid ${zoneName === z.name ? 'var(--color-primary)' : 'var(--color-outline-variant)'}`, background: zoneName === z.name ? 'rgba(0,109,55,0.08)' : 'none', color: 'var(--color-on-surface)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                    {z.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>Radius (km)</label>
-              <input type="number" min={1} max={15} value={radiusKm} onChange={e => setRadiusKm(e.target.value)}
-                style={{ width: '100%', height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14, marginTop: 6 }} />
-            </div>
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>End time</label>
-              <input type="datetime-local" value={endTime} onChange={e => setEndTime(e.target.value)}
-                style={{ width: '100%', height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14, marginTop: 6 }} />
-            </div>
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>Preferred route note (optional)</label>
-              <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. via Outer Ring Road"
-                style={{ width: '100%', height: 44, borderRadius: 10, border: '1px solid var(--color-outline-variant)', padding: '0 12px', fontSize: 14, marginTop: 6 }} />
-            </div>
-            <button onClick={handleActivate} disabled={busy}
-              style={{ width: '100%', height: 48, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
-              {busy ? 'Activating…' : 'Activate Go Home Mode'}
-            </button>
-          </div>
-        )}
-      </div>
-    </>
-  )
-}
-
 // ── Incoming Ride Request Modal ─────────────────────────────────
 function RideRequestModal({ ride, onAccept, onReject, goHomeMatch }) {
   const [countdown, setCountdown] = useState(30)
@@ -712,7 +572,9 @@ function RideRequestModal({ ride, onAccept, onReject, goHomeMatch }) {
           <div style={{ background: 'rgba(0,109,55,0.1)', border: '1px solid rgba(0,109,55,0.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 18 }}>📍</span>
             <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary)' }}>
-              Priority Match — {goHomeMatch.distanceKm} km from home · ₹{ride.estimated_fare} potential earnings
+              Priority Match — ends {goHomeMatch.dropGapKm} km from home
+              {goHomeMatch.progressKm != null ? `, ${goHomeMatch.progressKm} km closer` : ''}
+              {goHomeMatch.etaMin != null ? ` · ~${goHomeMatch.etaMin} min` : ''} · ₹{ride.estimated_fare}
             </p>
           </div>
         )}
@@ -763,7 +625,10 @@ export default function DriverHomePage() {
   const [activeNav, setActiveNav]   = useState('home')
   const [vehicle, setVehicle]       = useState(null)
   const [driverProfileId, setDriverProfileId] = useState(null)
-  const [incomingRide, setIncomingRide] = useState(null)
+  // [{ ride, match }] — in Go Home Mode kept sorted by match.score desc so
+  // rideQueue[0] is always the most "on the way home" request; match is
+  // null when Go Home Mode is off.
+  const [rideQueue, setRideQueue] = useState([])
   const [activeRide, setActiveRide] = useState(null)
   const [todayEarnings, setTodayEarnings] = useState(0)
   const [todayTripsCount, setTodayTripsCount] = useState(0)
@@ -771,14 +636,21 @@ export default function DriverHomePage() {
   const [preferredRidersCount, setPreferredRidersCount] = useState(0)
   const [subscription, setSubscription] = useState(null)
   const [goHomeSession, setGoHomeSession] = useState(null)
-  const [showGoHomeModal, setShowGoHomeModal] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
-  const [goHomeMatch, setGoHomeMatch] = useState(null)
   const [showPreferredRiders, setShowPreferredRiders] = useState(false)
 
   const [displayName, setDisplayName] = useState('Driver')
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening'
+
+  const currentRequest = rideQueue[0] ?? null
+
+  // Real, continuously-updated position while online — broadcasts to
+  // driver_profiles (so riders/dispatch can see it) and feeds Go Home
+  // Mode's matching (pickup-detour + bearing gates). Optional wherever
+  // it's used — matching still works without a fix. Declared before the
+  // effects below since they depend on it.
+  const { location: liveLocation } = useDriverLocation({ driverProfileId, active: isOnline })
 
   useEffect(() => {
     if (!user) return
@@ -802,29 +674,91 @@ export default function DriverHomePage() {
     load()
   }, [user])
 
-  // Listen for new ride requests assigned to this driver
+  // Listen for ride requests assigned to this driver — either a direct
+  // booking (INSERT, rider picked this driver by name) or the dispatch
+  // engine offering an auto-match request (UPDATE, driver_id just became
+  // this driver's id while status is still 'requested'). Both funnel into
+  // the same queue/Go-Home-filtering logic.
   useEffect(() => {
     if (!driverProfileId || !isOnline) return
+
+    async function handleIncomingRide(ride) {
+      // A rider cancelling reaches this driver as an UPDATE on the same
+      // row (driver_id unchanged, status -> 'cancelled') since the filter
+      // above is on driver_id, not status. Without this, an accepted
+      // ride the rider then cancels never clears activeRide, and the
+      // driver's screen is stuck showing "Ride Accepted"/"En Route"
+      // forever with no way to know the rider bailed.
+      if (ride.status === 'cancelled') {
+        setActiveRide(current => {
+          if (current?.id !== ride.id) return current
+          alert('The rider cancelled this ride.')
+          return null
+        })
+        setRideQueue(q => q.filter(item => item.ride.id !== ride.id))
+        return
+      }
+      if (ride.status !== 'requested') return
+
+      if (goHomeSession) {
+        // While Go Home Mode is active, only surface rides that actually
+        // head home, and keep the queue ordered best-first so the driver
+        // always sees the most "on the way" request at the top. (For an
+        // auto-match ride, dispatch_pending_rides already filtered this
+        // server-side — this is a defensive re-check, e.g. Go Home Mode
+        // having just turned on after the offer was made.)
+        const match = matchGoHomeRide(ride, goHomeSession, liveLocation)
+        if (!match.compatible) {
+          await releaseOrExpire(ride)
+          return
+        }
+        setRideQueue(q => (
+          q.some(item => item.ride.id === ride.id)
+            ? q
+            : [...q, { ride, match }].sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0))
+        ))
+      } else {
+        setRideQueue(q => (
+          q.some(item => item.ride.id === ride.id) ? q : [...q, { ride, match: null }]
+        ))
+      }
+    }
+
+    // Catch up on anything already offered before this page was open to
+    // hear it — e.g. the dispatch engine assigned this driver a ride while
+    // their app was closed/backgrounded. Without this, an offer made just
+    // before the driver opens the app is invisible until it times out and
+    // moves on to the next candidate (confirmed happening in testing).
+    //
+    // Excludes a ride whose offered_at was just backdated by reject_or_
+    // expire_ride (schema.sql) — that's this same driver's own rejection,
+    // not a fresh offer, and without this filter it would silently pop
+    // back into the queue as if it were new if the driver refreshes
+    // during the up-to-60s window before the next dispatch cron tick
+    // actually reassigns it elsewhere. A direct (non-auto) booking never
+    // sets offered_at at all, so those always still count as fresh.
+    supabase.from('rides').select('*').eq('driver_id', driverProfileId).eq('status', 'requested')
+      .or(`offered_at.is.null,offered_at.gte.${new Date(Date.now() - 30000).toISOString()}`)
+      .then(({ data }) => (data ?? []).forEach(handleIncomingRide))
+
+    // Same problem, one step later: a driver who refreshes (or reopens the
+    // app) mid-trip previously lost the active-ride panel entirely — it
+    // only ever got set client-side inside handleAcceptRide, so a reload
+    // left an accepted/active ride stranded with no Start/Complete button
+    // and no way back to it short of editing the DB by hand.
+    supabase.from('rides').select('*').eq('driver_id', driverProfileId).in('status', ['accepted', 'active'])
+      .limit(1).maybeSingle()
+      .then(({ data }) => { if (data) setActiveRide(data) })
+
     const channel = supabase
       .channel('driver-rides-' + driverProfileId)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverProfileId}` }, async payload => {
-        if (payload.new.status !== 'requested') return
-        if (goHomeSession) {
-          const match = matchGoHomeRide(payload.new, goHomeSession)
-          if (!match.compatible) {
-            // Only route-compatible rides are suggested while Go Home Mode is active
-            await supabase.from('rides').update({ status: 'expired' }).eq('id', payload.new.id)
-            return
-          }
-          setGoHomeMatch(match)
-        } else {
-          setGoHomeMatch(null)
-        }
-        setIncomingRide(payload.new)
-      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverProfileId}` },
+        payload => handleIncomingRide(payload.new))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverProfileId}` },
+        payload => handleIncomingRide(payload.new))
       .subscribe()
     return () => supabase.removeChannel(channel)
-  }, [driverProfileId, isOnline, goHomeSession])
+  }, [driverProfileId, isOnline, goHomeSession, liveLocation])
 
   // Today's earnings — completed payments only, refreshed live as riders pay
   useEffect(() => {
@@ -865,10 +799,11 @@ export default function DriverHomePage() {
   }, [driverProfileId])
 
   // Subscription status — most recent active/grace_period plan, if any.
-  // Transitions expired dates first (no backend cron) so this never shows stale "active".
+  // Transitions expired dates first (via the same pg_cron-scheduled
+  // function, called on demand) so this never shows stale "active".
   useEffect(() => {
     if (!driverProfileId) return
-    checkAndUpdateSubscriptionStatus(driverProfileId).finally(() => {
+    checkAndUpdateSubscriptionStatus().finally(() => {
       supabase
         .from('driver_subscriptions')
         .select('status, expiry_date, subscription_plans(name)')
@@ -893,9 +828,10 @@ export default function DriverHomePage() {
     return () => supabase.removeChannel(channel)
   }, [driverProfileId])
 
-  // Go Home Mode — load any active session, and auto-expire it client-side
-  // once end_time passes (no backend cron for this, same as the UPI
-  // payment timeout).
+  // Go Home Mode — load any active session, and auto-expire it locally
+  // once end_time passes too, so the UI updates the instant it lapses
+  // rather than waiting for the next expire_stale_go_home_sessions
+  // cron tick (schema.sql) to catch up.
   useEffect(() => {
     if (!driverProfileId) return
     fetchActiveGoHomeSession(driverProfileId).then(setGoHomeSession)
@@ -919,8 +855,28 @@ export default function DriverHomePage() {
     return () => clearTimeout(t)
   }, [goHomeSession])
 
+  // Auto-match rides are never killed by a single driver's reject/timeout/
+  // being-busy — they go back to dispatch_pending_rides' pool (via a
+  // backdated offered_at, which the next cron tick treats as a stale
+  // offer and reassigns) so the next candidate gets a shot. Only a direct
+  // booking (a rider picked this driver by name) actually expires, since
+  // there's no pool to fall back into. Routed through reject_or_expire_ride
+  // (schema.sql) since rides' UPDATE policy is admin-only now — every real
+  // transition on this table goes through a security-definer function
+  // that re-checks ownership/state server-side instead of trusting a
+  // plain client update.
+  async function releaseOrExpire(ride) {
+    await supabase.rpc('reject_or_expire_ride', { p_ride_id: ride.id, p_driver_id: driverProfileId })
+  }
+
   async function handleAcceptRide() {
-    if (!incomingRide || !driverProfileId) return
+    const request = rideQueue[0]
+    if (!request || !driverProfileId) return
+    const ride = request.ride
+
+    // accept_ride itself now also refuses if I'm already on an
+    // accepted/active ride (enforced server-side, not just here) — this
+    // pre-check just avoids burning the offer on a doomed call.
     const { data: existing } = await supabase
       .from('rides')
       .select('id')
@@ -928,51 +884,66 @@ export default function DriverHomePage() {
       .in('status', ['accepted', 'active'])
       .maybeSingle()
     if (existing) {
-      await supabase.from('rides').update({ status: 'expired' }).eq('id', incomingRide.id)
-      setIncomingRide(null)
+      await releaseOrExpire(ride)
+      setRideQueue(q => q.slice(1))
       return
     }
-    await supabase.from('rides').update({ status: 'accepted' }).eq('id', incomingRide.id)
-    setActiveRide(incomingRide)
-    setIncomingRide(null)
+
+    // accept_ride only succeeds if this ride is still actually offered to
+    // me — dispatch_pending_rides' 30s timeout sweep could have reassigned
+    // it to someone else a moment before this tap landed, in which case it
+    // returns null rather than erroring.
+    const { data: accepted, error } = await supabase.rpc('accept_ride', {
+      p_ride_id: ride.id, p_driver_id: driverProfileId,
+    })
+
+    if (error || !accepted) {
+      alert('Sorry — this ride was just given to another driver.')
+      setRideQueue(q => q.slice(1))
+      return
+    }
+    setActiveRide(accepted)
+    setRideQueue([])   // drop any other queued candidates — they stay 'requested' for normal dispatch
   }
 
   async function handleRejectRide() {
-    if (incomingRide) {
-      await supabase.from('rides').update({ status: 'expired' }).eq('id', incomingRide.id)
-    }
-    setIncomingRide(null)
+    const request = rideQueue[0]
+    if (request) await releaseOrExpire(request.ride)
+    setRideQueue(q => q.slice(1))   // fall through to the next-best queued request
   }
 
   async function handleStartRide() {
     if (!activeRide) return
-    const startedAt = new Date().toISOString()
-    await supabase.from('rides').update({ status: 'active', started_at: startedAt }).eq('id', activeRide.id)
-    setActiveRide(r => ({ ...r, status: 'active', started_at: startedAt }))
+    const { data, error } = await supabase.rpc('start_ride', { p_ride_id: activeRide.id })
+    if (error) {
+      alert('Could not start this ride: ' + error.message)
+      return
+    }
+    setActiveRide(data)
   }
 
   async function handleCompleteRide() {
     if (!activeRide) return
-    const completedAt = new Date()
-    const startedAt = activeRide.started_at ? new Date(activeRide.started_at) : completedAt
-    const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000))
-    // No live GPS tracking yet — approximate distance from elapsed time at typical city driving speed.
-    const distanceKm = Math.round((durationMinutes / 60) * 20 * 10) / 10
-    await supabase.from('rides').update({
-      status: 'completed',
-      completed_at: completedAt.toISOString(),
-      final_fare: activeRide.estimated_fare,
-      duration_minutes: durationMinutes,
-      distance_km: distanceKm,
-    }).eq('id', activeRide.id)
+    // Duration/distance/final_fare are now computed server-side inside
+    // complete_ride (schema.sql) — same approximation as before (elapsed
+    // time at a typical city driving speed, no live GPS tracking yet),
+    // just no longer trusting the client to report its own numbers.
+    const { error } = await supabase.rpc('complete_ride', { p_ride_id: activeRide.id })
+    if (error) {
+      alert('Could not complete this ride: ' + error.message)
+      return
+    }
     setActiveRide(null)
   }
 
   async function handleToggleOnline() {
     setToggling(true)
     const next = !isOnline
-    if (user) {
-      const { error } = await supabase.from('driver_profiles').update({ is_online: next }).eq('user_id', user.id)
+    if (driverProfileId) {
+      // Routed through set_driver_online_status (schema.sql) — driver_profiles'
+      // UPDATE policy is admin-only now, so a plain client update no longer
+      // reaches this table at all.
+      const { error } = await supabase.rpc('set_driver_online_status', { p_driver_id: driverProfileId, p_is_online: next })
       if (!error) setIsOnline(next)
     } else {
       setIsOnline(next)
@@ -1038,24 +1009,14 @@ export default function DriverHomePage() {
         </div>
       )}
 
-      {/* Incoming ride request */}
-      {incomingRide && (
+      {/* Incoming ride request — top of the queue (best Go Home match first) */}
+      {currentRequest && (
         <RideRequestModal
-          ride={incomingRide}
+          key={currentRequest.ride.id}
+          ride={currentRequest.ride}
           onAccept={handleAcceptRide}
           onReject={handleRejectRide}
-          goHomeMatch={goHomeMatch}
-        />
-      )}
-
-      {/* Go Home Mode */}
-      {showGoHomeModal && (
-        <GoHomeModal
-          session={goHomeSession}
-          driverProfileId={driverProfileId}
-          onClose={() => setShowGoHomeModal(false)}
-          onActivated={session => { setGoHomeSession(session); setShowGoHomeModal(false) }}
-          onDeactivated={() => { setGoHomeSession(null); setShowGoHomeModal(false) }}
+          goHomeMatch={currentRequest.match}
         />
       )}
 
@@ -1088,7 +1049,7 @@ export default function DriverHomePage() {
           </div>
         </div>
         <div className="flex flex-col gap-1" style={{ flex: 1 }}>
-          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode', onClick: () => { setShowGoHomeModal(true); setDrawerOpen(false) } }, { icon: '📊', label: 'Analytics' }, { icon: '⭐', label: 'Subscription', onClick: () => { setDrawerOpen(false); navigate('/driver/subscription') } }, { icon: '📣', label: 'Ads', onClick: () => { setDrawerOpen(false); navigate('/driver/ads') } }, { icon: '⚙️', label: 'Settings' }].map(({ icon, label, active, onClick }) => (
+          {[{ icon: '💰', label: 'Earnings', active: true }, { icon: '📍', label: 'Go Home Mode', onClick: () => { setDrawerOpen(false); navigate('/driver/go-home') } }, { icon: '📊', label: 'Analytics', onClick: () => { setDrawerOpen(false); navigate('/driver/analytics') } }, { icon: '⭐', label: 'Subscription', onClick: () => { setDrawerOpen(false); navigate('/driver/subscription') } }, { icon: '📣', label: 'Ads', onClick: () => { setDrawerOpen(false); navigate('/driver/ads') } }, { icon: '⚙️', label: 'Settings', onClick: () => { setDrawerOpen(false); navigate('/driver/settings') } }].map(({ icon, label, active, onClick }) => (
             <button key={label} onClick={onClick} className="flex items-center gap-4 text-left" style={{ padding: '10px 12px', borderRadius: 8, border: 'none', background: active ? 'var(--color-secondary-container)' : 'transparent', color: active ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)', fontSize: 16, fontWeight: active ? 700 : 400, cursor: onClick ? 'pointer' : 'default' }}>
               <span style={{ fontSize: 18 }}>{icon}</span>{label}
               {label === 'Go Home Mode' && goHomeSession && (
@@ -1123,10 +1084,10 @@ export default function DriverHomePage() {
 
       {/* Tab Content */}
       <div style={{ paddingBottom: 80 }}>
-        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => setShowGoHomeModal(true)} onOpenPreferredRiders={() => setShowPreferredRiders(true)} onOpenEarnings={() => setActiveNav('rides')} onOpenSubscription={() => navigate('/driver/subscription')} />}
-        {activeNav === 'discovery' && <DiscoveryTab />}
+        {activeNav === 'home'      && <HomeTab displayName={displayName} greeting={greeting} isOnline={isOnline} toggling={toggling} onToggle={handleToggleOnline} vehicle={vehicle} todayEarnings={todayEarnings} todayTripsCount={todayTripsCount} driverRating={driverRating} preferredRidersCount={preferredRidersCount} subscription={subscription} goHomeSession={goHomeSession} onOpenGoHome={() => navigate('/driver/go-home')} onOpenPreferredRiders={() => setShowPreferredRiders(true)} onOpenEarnings={() => setActiveNav('rides')} onOpenSubscription={() => navigate('/driver/subscription')} liveLocation={liveLocation} />}
+        {activeNav === 'discovery' && <DiscoveryTab driverProfileId={driverProfileId} liveLocation={liveLocation} />}
         {activeNav === 'rides'     && <RidesTab driverProfileId={driverProfileId} />}
-        {activeNav === 'family'    && <FamilyTab />}
+        {activeNav === 'family'    && <FamilyTab onOpenPreferredRiders={() => setShowPreferredRiders(true)} />}
       </div>
 
       {/* Bottom Nav */}

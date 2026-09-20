@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchPreferredDriversForRider } from '@/lib/preferredDrivers'
 import { fetchFamilyMembers, fetchUpcomingScheduledRides, scheduleRide, cancelScheduledRide } from '@/lib/family'
+import LocationSearchInput from '@/components/LocationSearchInput'
+import RiderBottomNav from '@/components/RiderBottomNav'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const DAY_NAMES = ['Mo','Tu','We','Th','Fr','Sa','Su']
@@ -143,7 +145,11 @@ export default function ScheduledRidesPage() {
       return
     }
     if (!pickup.trim() || !destination.trim()) {
-      setScheduleError('Please enter pickup and destination.')
+      setScheduleError('Please select pickup and destination.')
+      return
+    }
+    if (pickup === destination) {
+      setScheduleError("Pickup and destination can't be the same place.")
       return
     }
     const [hours, minutes] = time.split(':').map(Number)
@@ -199,7 +205,7 @@ export default function ScheduledRidesPage() {
         </div>
       </header>
 
-      <main style={{ flex: 1, maxWidth: 480, width: '100%', margin: '0 auto', padding: '20px 20px 120px', overflowY: 'auto' }}>
+      <main style={{ flex: 1, maxWidth: 480, width: '100%', margin: '0 auto', padding: '20px 20px 200px', overflowY: 'auto' }}>
 
         {/* Success Banner */}
         {scheduled && (
@@ -281,23 +287,23 @@ export default function ScheduledRidesPage() {
           </div>
         )}
 
-        {/* Pickup Input */}
-        <div style={{ position: 'relative', marginBottom: 12 }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--color-primary)" style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}><circle cx="12" cy="12" r="5"/></svg>
-          <input type="text" placeholder="Pickup location" value={pickup} onChange={e => setPickup(e.target.value)}
-            style={{ width: '100%', height: 52, paddingLeft: 44, paddingRight: 16, background: '#F8F9FA', border: 'none', borderRadius: 12, fontSize: 15, color: 'var(--color-on-surface)', outline: 'none', fontFamily: 'var(--font-sans)', boxSizing: 'border-box', transition: 'box-shadow 0.2s' }}
-            onFocus={e => e.target.style.boxShadow = '0 0 0 2px rgba(0,109,55,0.2)'}
-            onBlur={e => e.target.style.boxShadow = 'none'}
+        {/* Pickup/destination — free-text search (src/lib/geocoding.js via
+            Nominatim), same as Book Ride, instead of a fixed 9-place list. */}
+        <div style={{ marginBottom: 12 }}>
+          <LocationSearchInput
+            value={pickup}
+            onChange={setPickup}
+            onSelect={result => setPickup(result.address)}
+            placeholder="Pickup location"
           />
         </div>
 
-        {/* Destination Input */}
-        <div style={{ position: 'relative', marginBottom: 12 }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ba1a1a" strokeWidth="2" style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5" fill="#ba1a1a" stroke="none"/></svg>
-          <input type="text" placeholder="Where to?" value={destination} onChange={e => setDestination(e.target.value)}
-            style={{ width: '100%', height: 52, paddingLeft: 44, paddingRight: 16, background: '#F8F9FA', border: 'none', borderRadius: 12, fontSize: 15, color: 'var(--color-on-surface)', outline: 'none', fontFamily: 'var(--font-sans)', boxSizing: 'border-box', transition: 'box-shadow 0.2s' }}
-            onFocus={e => e.target.style.boxShadow = '0 0 0 2px rgba(0,109,55,0.2)'}
-            onBlur={e => e.target.style.boxShadow = 'none'}
+        <div style={{ marginBottom: 12 }}>
+          <LocationSearchInput
+            value={destination}
+            onChange={setDestination}
+            onSelect={result => setDestination(result.address)}
+            placeholder="Where to?"
           />
         </div>
 
@@ -362,8 +368,8 @@ export default function ScheduledRidesPage() {
         )}
       </main>
 
-      {/* Sticky CTA */}
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '16px 20px 32px', background: 'linear-gradient(to top, var(--color-surface) 70%, transparent)', zIndex: 30 }}>
+      {/* Sticky CTA — sits just above the bottom nav */}
+      <div style={{ position: 'fixed', bottom: 64, left: 0, right: 0, padding: '16px 20px 12px', background: 'linear-gradient(to top, var(--color-surface) 78%, transparent)', zIndex: 40 }}>
         <div style={{ maxWidth: 480, margin: '0 auto' }}>
           <button onClick={handleSchedule} disabled={scheduling}
             style={{ width: '100%', height: 56, background: 'var(--color-primary)', color: 'white', borderRadius: 14, border: 'none', fontSize: 16, fontWeight: 700, cursor: scheduling ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, boxShadow: '0 4px 16px rgba(0,109,55,0.25)', transition: 'all 0.2s', opacity: scheduling ? 0.8 : 1 }}>
@@ -381,6 +387,8 @@ export default function ScheduledRidesPage() {
           </button>
         </div>
       </div>
+
+      <RiderBottomNav active="trips" />
 
       <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
     </div>

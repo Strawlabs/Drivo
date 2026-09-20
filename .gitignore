@@ -13,6 +13,10 @@ dist-ssr/
 .env.local
 .env.*.local
 
+# Claude Code local settings — machine-specific permission allowlist,
+# tends to accumulate one-off Bash entries with embedded secrets/tokens
+.claude/settings.local.json
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

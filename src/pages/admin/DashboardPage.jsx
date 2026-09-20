@@ -8,6 +8,7 @@ import {
   assignCampaignToDriver, completeAssignment,
 } from '@/lib/ads'
 import { fetchPlatformData, summarizeReports, REPORT_PERIODS } from '@/lib/reports'
+import { fetchFlaggedPayments, resolveFlaggedPayment } from '@/lib/payments'
 
 function Avatar({ name = '?', size = 40 }) {
   return (
@@ -23,9 +24,12 @@ function Avatar({ name = '?', size = 40 }) {
 }
 
 function DocsBadge({ status }) {
+  // "submitted" used to read "✓ Verified" here — nobody had, since there
+  // was no way to even view the uploaded files (see DriverDocumentsPanel).
+  // Submitted means uploaded and awaiting review, not verified.
   if (status === 'submitted') return (
-    <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:12, fontWeight:600, color:'#006d37', background:'rgba(46,204,113,0.12)', padding:'3px 10px', borderRadius:6 }}>
-      <span className="material-symbols-outlined" style={{ fontSize:15 }}>check_circle</span> Verified
+    <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:12, fontWeight:600, color:'#b45309', background:'rgba(245,158,11,0.14)', padding:'3px 10px', borderRadius:6 }}>
+      <span className="material-symbols-outlined" style={{ fontSize:15 }}>hourglass_top</span> Docs Submitted
     </span>
   )
   if (status === 'pending') return (
@@ -37,6 +41,74 @@ function DocsBadge({ status }) {
     <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:12, fontWeight:600, color:'#4f6073', background:'#e5eeff', padding:'3px 10px', borderRadius:6 }}>
       {status}
     </span>
+  )
+}
+
+const KYC_DOC_LABELS = { license: "Driver's License", insurance: 'Vehicle Insurance', ev_cert: 'EV Certification' }
+
+/*
+  Actually lets the admin look at what a driver uploaded before approving
+  them — previously "Approve" was a button with no way to ever see the
+  license/insurance/EV-cert files DriverVerificationPage already uploads
+  to the (private) kyc-documents bucket. Signed URLs, 10-minute expiry,
+  fetched fresh every time this opens rather than cached/stored anywhere.
+*/
+function DriverDocumentsPanel({ driver, onClose }) {
+  const [loading, setLoading] = useState(true)
+  const [docs, setDocs] = useState({})
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      setError(null)
+      const { data: files, error: listErr } = await supabase.storage.from('kyc-documents').list(driver.user_id)
+      if (listErr) {
+        if (!cancelled) { setError(listErr.message); setLoading(false) }
+        return
+      }
+      const found = {}
+      for (const f of files ?? []) {
+        const docId = f.name.split('.')[0]
+        const { data: signed } = await supabase.storage.from('kyc-documents')
+          .createSignedUrl(`${driver.user_id}/${f.name}`, 600)
+        if (signed?.signedUrl) found[docId] = signed.signedUrl
+      }
+      if (!cancelled) { setDocs(found); setLoading(false) }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [driver.user_id])
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(11,28,48,0.5)', zIndex: 200 }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: 'white', borderRadius: 16, padding: 24, width: 420, maxWidth: '90vw', zIndex: 201, boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: '#0b1c30', margin: 0 }}>{driver.users?.name ?? 'Driver'}'s documents</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#4f6073', lineHeight: 1 }}>✕</button>
+        </div>
+        <p style={{ fontSize: 12, color: '#4f6073', marginBottom: 16 }}>Links expire in 10 minutes.</p>
+
+        {loading && <p style={{ fontSize: 13, color: '#4f6073' }}>Loading…</p>}
+        {error && <p style={{ fontSize: 13, color: '#ba1a1a' }}>Couldn't load documents: {error}</p>}
+        {!loading && !error && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {Object.entries(KYC_DOC_LABELS).map(([id, label]) => (
+              <div key={id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: '#f8f9ff', borderRadius: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>{label}</span>
+                {docs[id] ? (
+                  <a href={docs[id]} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 700, color: '#006d37', textDecoration: 'underline' }}>View</a>
+                ) : (
+                  <span style={{ fontSize: 12, color: '#ba1a1a' }}>Not uploaded</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -61,14 +133,16 @@ function SubscriptionAdminPanel() {
 
   async function updatePrice(planId, price) {
     setSavingId(planId)
-    await supabase.from('subscription_plans').update({ price }).eq('id', planId)
+    const { error } = await supabase.from('subscription_plans').update({ price }).eq('id', planId)
+    if (error) alert('Could not update price: ' + error.message)
     await load()
     setSavingId(null)
   }
 
   async function toggleActive(plan) {
     setSavingId(plan.id)
-    await supabase.from('subscription_plans').update({ is_active: !plan.is_active }).eq('id', plan.id)
+    const { error } = await supabase.from('subscription_plans').update({ is_active: !plan.is_active }).eq('id', plan.id)
+    if (error) alert('Could not update plan: ' + error.message)
     await load()
     setSavingId(null)
   }
@@ -153,6 +227,109 @@ function SubscriptionAdminPanel() {
   )
 }
 
+/*
+  Same fix as SubscriptionAdminPanel's editable plan prices, applied to
+  ride fares — base_fare/per_km_rate/min_fare/route_factor/avg_speed_kmh
+  used to be hardcoded constants in src/lib/fare.js. The PRD leaves the
+  actual fare model undecided; this at least makes changing the numbers
+  a real, admin-controlled action instead of a code deploy.
+*/
+function PricingAdminPanel() {
+  const [tiers, setTiers] = useState([])
+  const [settings, setSettings] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [savingKey, setSavingKey] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    const [{ data: t }, { data: s }] = await Promise.all([
+      supabase.from('fare_tiers').select('*').order('tier'),
+      supabase.from('fare_settings').select('*').eq('id', 1).maybeSingle(),
+    ])
+    setTiers(t ?? [])
+    setSettings(s ?? null)
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function updateTier(tier, field, value) {
+    setSavingKey(tier + field)
+    const { error } = await supabase.from('fare_tiers').update({ [field]: value, updated_at: new Date().toISOString() }).eq('tier', tier)
+    if (error) alert('Could not update pricing: ' + error.message)
+    await load()
+    setSavingKey(null)
+  }
+
+  async function updateSettings(field, value) {
+    setSavingKey('settings' + field)
+    const { error } = await supabase.from('fare_settings').update({ [field]: value, updated_at: new Date().toISOString() }).eq('id', 1)
+    if (error) alert('Could not update settings: ' + error.message)
+    await load()
+    setSavingKey(null)
+  }
+
+  if (loading) return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
+
+  const numberField = (value, onCommit, key, { prefix = '', width = 80 } = {}) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      {prefix && <span style={{ fontSize: 13, color: '#4f6073' }}>{prefix}</span>}
+      <input type="number" defaultValue={value} disabled={savingKey === key}
+        onBlur={e => { const v = Number(e.target.value); if (v > 0 && v !== Number(value)) onCommit(v) }}
+        style={{ width, height: 32, padding: '0 8px', border: '1px solid #bbcbbb', borderRadius: 6, fontSize: 13 }} />
+    </div>
+  )
+
+  return (
+    <>
+      <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden', marginBottom: 20 }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>Ride Fare Tiers</h2>
+          <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3 }}>Changes apply to every fare estimated from here on — riders currently mid-booking still see the value they already loaded.</p>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#eff4ff' }}>
+                {['Tier', 'Base Fare', 'Per-KM Rate', 'Minimum Fare'].map(h => (
+                  <th key={h} style={{ padding: '12px 24px', textAlign: 'left', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: '#4f6073', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {tiers.map(t => (
+                <tr key={t.tier} style={{ borderTop: '1px solid #e5eeff' }}>
+                  <td style={{ padding: '16px 24px', fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>{t.label}</td>
+                  <td style={{ padding: '16px 24px' }}>{numberField(t.base_fare, v => updateTier(t.tier, 'base_fare', v), t.tier + 'base_fare', { prefix: '₹' })}</td>
+                  <td style={{ padding: '16px 24px' }}>{numberField(t.per_km_rate, v => updateTier(t.tier, 'per_km_rate', v), t.tier + 'per_km_rate', { prefix: '₹/km' })}</td>
+                  <td style={{ padding: '16px 24px' }}>{numberField(t.min_fare, v => updateTier(t.tier, 'min_fare', v), t.tier + 'min_fare', { prefix: '₹' })}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {settings && (
+        <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', padding: '20px 24px' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: '0 0 4px' }}>Route Assumptions</h2>
+          <p style={{ fontSize: 12, color: '#4f6073', marginBottom: 20 }}>Shared across every tier — not a per-vehicle price, but how fare/ETA are estimated before a real route is fetched.</p>
+          <div style={{ display: 'flex', gap: 32 }}>
+            <div>
+              <p style={{ fontSize: 12, color: '#4f6073', marginBottom: 6 }}>Route factor (real route ÷ straight-line distance)</p>
+              {numberField(settings.route_factor, v => updateSettings('route_factor', v), 'settingsroute_factor', { width: 90 })}
+            </div>
+            <div>
+              <p style={{ fontSize: 12, color: '#4f6073', marginBottom: 6 }}>Assumed average speed (km/h)</p>
+              {numberField(settings.avg_speed_kmh, v => updateSettings('avg_speed_kmh', v), 'settingsavg_speed_kmh', { width: 90 })}
+            </div>
+          </div>
+        </section>
+      )}
+    </>
+  )
+}
+
 const INCIDENT_STATUS_COLOR = {
   open: { bg: 'rgba(186,26,26,0.08)', color: '#ba1a1a' },
   reviewing: { bg: '#e5eeff', color: '#4f6073' },
@@ -162,6 +339,7 @@ const INCIDENT_STATUS_COLOR = {
 function SafetyAdminPanel() {
   const [incidents, setIncidents] = useState([])
   const [sosEvents, setSosEvents] = useState([])
+  const [flaggedPayments, setFlaggedPayments] = useState([])
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState(null)
   const [notesDraft, setNotesDraft] = useState({})
@@ -169,12 +347,14 @@ function SafetyAdminPanel() {
 
   async function load() {
     setLoading(true)
-    const [{ data: inc }, { data: sos }] = await Promise.all([
+    const [{ data: inc }, { data: sos }, flagged] = await Promise.all([
       supabase.from('incident_reports').select('*, users:reported_by(name, phone), rides(pickup_address, destination_address)').order('created_at', { ascending: false }),
       supabase.from('sos_events').select('*, rides(pickup_address, destination_address), users:triggered_by(name, phone)').order('created_at', { ascending: false }),
+      fetchFlaggedPayments(),
     ])
     setIncidents(inc ?? [])
     setSosEvents(sos ?? [])
+    setFlaggedPayments(flagged)
     setLoading(false)
   }
 
@@ -182,21 +362,35 @@ function SafetyAdminPanel() {
 
   async function updateStatus(id, status) {
     setSavingId(id)
-    await supabase.from('incident_reports').update({
+    const { error } = await supabase.from('incident_reports').update({
       status,
       resolution_notes: notesDraft[id] ?? null,
       reviewed_by: user?.id ?? null,
       updated_at: new Date().toISOString(),
     }).eq('id', id)
+    if (error) alert('Could not update report: ' + error.message)
     await load()
     setSavingId(null)
   }
 
   async function resolveSosEvent(id) {
     setSavingId(id)
-    await supabase.from('sos_events').update({ resolved_at: new Date().toISOString() }).eq('id', id)
+    const { error } = await supabase.from('sos_events').update({ resolved_at: new Date().toISOString() }).eq('id', id)
+    if (error) alert('Could not resolve SOS event: ' + error.message)
     await load()
     setSavingId(null)
+  }
+
+  async function resolvePayment(id, resolution) {
+    setSavingId(id)
+    try {
+      await resolveFlaggedPayment(id, resolution)
+      await load()
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setSavingId(null)
+    }
   }
 
   if (loading) return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
@@ -206,20 +400,24 @@ function SafetyAdminPanel() {
 
   return (
     <>
-      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 28 }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 28 }}>
         {[
           { label: 'Open Incidents', value: openCount, icon: 'report' },
           { label: 'Active SOS Events', value: activeSosCount, icon: 'emergency_home' },
+          { label: 'Flagged Payments', value: flaggedPayments.length, icon: 'flag' },
           { label: 'Total Reports', value: incidents.length, icon: 'assignment' },
-        ].map(card => (
+        ].map(card => {
+          const alert = (card.label === 'Active SOS Events' && activeSosCount > 0) || (card.label === 'Flagged Payments' && flaggedPayments.length > 0)
+          return (
           <div key={card.label} style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, padding: 24, boxShadow: '0 4px 20px rgba(26,43,60,0.05)' }}>
-            <div style={{ padding: 10, background: card.label === 'Active SOS Events' && activeSosCount > 0 ? 'rgba(186,26,26,0.12)' : '#d2e4fb', borderRadius: 12, display: 'inline-flex', marginBottom: 12 }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 22, color: card.label === 'Active SOS Events' && activeSosCount > 0 ? '#ba1a1a' : '#4f6073' }}>{card.icon}</span>
+            <div style={{ padding: 10, background: alert ? 'rgba(186,26,26,0.12)' : '#d2e4fb', borderRadius: 12, display: 'inline-flex', marginBottom: 12 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 22, color: alert ? '#ba1a1a' : '#4f6073' }}>{card.icon}</span>
             </div>
             <p style={{ fontSize: 13, color: '#4f6073', marginBottom: 4 }}>{card.label}</p>
             <h3 style={{ fontSize: 28, fontWeight: 600, color: '#0b1c30', margin: 0 }}>{card.value}</h3>
           </div>
-        ))}
+          )
+        })}
       </section>
 
       <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden', marginBottom: 28 }}>
@@ -243,6 +441,45 @@ function SafetyAdminPanel() {
                   Mark Resolved
                 </button>
               )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid #f1f5f9', borderRadius: 18, boxShadow: '0 2px 8px rgba(26,43,60,0.05)', overflow: 'hidden', marginBottom: 28 }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #bbcbbb' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#0b1c30', margin: 0 }}>Flagged Payments</h2>
+          <p style={{ fontSize: 12, color: '#4f6073', marginTop: 3 }}>A UPI reference was reused across two payments — decide which (if either) actually paid.</p>
+        </div>
+        <div style={{ padding: '8px 24px 20px' }}>
+          {flaggedPayments.length === 0 && <p style={{ fontSize: 13, color: '#4f6073', padding: '12px 0' }}>No flagged payments.</p>}
+          {flaggedPayments.map(p => (
+            <div key={p.id} style={{ padding: '14px 0', borderTop: '1px solid #e5eeff' }}>
+              <div className="flex justify-between items-start" style={{ marginBottom: 6 }}>
+                <div>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: '#0b1c30' }}>
+                    {p.users?.name ?? 'Unknown rider'} → {p.driver_profiles?.users?.name ?? 'Unknown driver'} · ₹{Number(p.amount).toFixed(2)}
+                  </p>
+                  <p style={{ fontSize: 12, color: '#4f6073' }}>
+                    {p.rides?.pickup_address ?? '—'} → {p.rides?.destination_address ?? '—'} · {new Date(p.created_at).toLocaleString('en-IN')}
+                  </p>
+                  <p style={{ fontSize: 12, color: '#ba1a1a', marginTop: 4 }}>
+                    Reference "{p.upi_reference}" also used by {p.conflictingPayment?.users?.name ?? 'another payment'}
+                    {p.conflictingPayment ? ` (currently ${p.conflictingPayment.status})` : ''}.
+                  </p>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#ba1a1a', background: 'rgba(186,26,26,0.08)', padding: '3px 10px', borderRadius: 6, whiteSpace: 'nowrap' }}>flagged</span>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => resolvePayment(p.id, 'failed')} disabled={savingId === p.id}
+                  style={{ padding: '6px 14px', border: '1px solid #ba1a1a', borderRadius: 8, background: 'none', color: '#ba1a1a', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  Reject (Mark Failed)
+                </button>
+                <button onClick={() => resolvePayment(p.id, 'completed')} disabled={savingId === p.id}
+                  style={{ padding: '6px 14px', border: 'none', borderRadius: 8, background: '#006d37', color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  Approve (Mark Completed)
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -335,37 +572,61 @@ function AdsAdminPanel() {
 
   async function handleCreate() {
     if (!form.title.trim()) return
-    await createCampaign({
-      title: form.title.trim(),
-      description: form.description.trim(),
-      revenueSharePercent: Number(form.revenueSharePercent),
-      startDate: form.startDate,
-      endDate: form.endDate,
-    })
-    setForm({ title: '', description: '', revenueSharePercent: 10, startDate: '', endDate: '' })
-    setShowCreate(false)
-    await load()
+    try {
+      await createCampaign({
+        title: form.title.trim(),
+        description: form.description.trim(),
+        revenueSharePercent: Number(form.revenueSharePercent),
+        startDate: form.startDate,
+        endDate: form.endDate,
+      })
+      setForm({ title: '', description: '', revenueSharePercent: 10, startDate: '', endDate: '' })
+      setShowCreate(false)
+      await load()
+    } catch (err) {
+      alert('Could not create campaign: ' + err.message)
+    }
   }
 
   async function handleStatusChange(id, status) {
-    await updateCampaignStatus(id, status)
-    await load()
-    if (selectedCampaignId === id) await loadAssignments(id)
+    try {
+      await updateCampaignStatus(id, status)
+      await load()
+      if (selectedCampaignId === id) await loadAssignments(id)
+    } catch (err) {
+      alert('Could not update campaign: ' + err.message)
+    }
   }
 
   async function handleAssign(driverId) {
     if (!selectedCampaignId) return
-    await assignCampaignToDriver({ campaignId: selectedCampaignId, driverId })
-    await loadAssignments(selectedCampaignId)
-    await load()
+    // Assigning a driver to a campaign that's already run its course
+    // (completed/cancelled) or hasn't started (draft) makes no sense —
+    // they'd get notified about an offer that isn't really live.
+    const campaign = campaigns.find(c => c.id === selectedCampaignId)
+    if (campaign && campaign.status !== 'active') {
+      alert(`This campaign is ${campaign.status}, not active — assign drivers only to active campaigns.`)
+      return
+    }
+    try {
+      await assignCampaignToDriver({ campaignId: selectedCampaignId, driverId })
+      await loadAssignments(selectedCampaignId)
+      await load()
+    } catch (err) {
+      alert('Could not assign driver: ' + err.message)
+    }
   }
 
   async function handleComplete(assignmentId) {
     const amount = Number(creditDraft[assignmentId])
     if (!amount || amount <= 0) return
-    await completeAssignment(assignmentId, amount)
-    await loadAssignments(selectedCampaignId)
-    await load()
+    try {
+      await completeAssignment(assignmentId, amount)
+      await loadAssignments(selectedCampaignId)
+      await load()
+    } catch (err) {
+      alert('Could not complete assignment: ' + err.message)
+    }
   }
 
   if (loading) return <p style={{ color: '#4f6073', fontSize: 14 }}>Loading…</p>
@@ -560,6 +821,16 @@ function ReportsAdminPanel() {
         <ReportCard title="Preferred Driver Usage" subtitle={`${report.preferredDriverUsage.totalActivePreferred} active relationships today`}>
           <MiniBarChart buckets={report.preferredDriverUsage.buckets} series={[{ key: 'newSaves', color: '#2ecc71' }]} />
         </ReportCard>
+
+        <ReportCard title="Cancellations" subtitle={`${report.cancellations.total} cancelled (${report.cancellations.rate}% of all rides)`}>
+          <MiniBarChart buckets={report.cancellations.buckets} series={[{ key: 'cancelled', color: '#ba1a1a' }]} />
+          {report.cancellations.byStage.map(s => (
+            <div key={s.stage} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: '1px solid #e5eeff', fontSize: 12, color: '#4f6073' }}>
+              <span>{{ before_acceptance: 'Before a driver accepted', after_acceptance: 'After acceptance, before start', after_start: 'After the ride started' }[s.stage]}</span>
+              <span style={{ fontWeight: 700, color: '#0b1c30' }}>{s.count}</span>
+            </div>
+          ))}
+        </ReportCard>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
@@ -593,14 +864,12 @@ function ReportsAdminPanel() {
 }
 
 const NAV = [
-  { icon: 'payments',   label: 'Earnings' },
-  { icon: 'home_pin',   label: 'Go Home Mode' },
   { icon: 'analytics',  label: 'Analytics', active: true },
+  { icon: 'payments',   label: 'Pricing' },
   { icon: 'loyalty',    label: 'Subscription' },
   { icon: 'shield',     label: 'Safety' },
   { icon: 'ads_click',  label: 'Ads' },
   { icon: 'assessment', label: 'Reports' },
-  { icon: 'settings',   label: 'Settings' },
 ]
 
 export default function AdminDashboardPage() {
@@ -609,6 +878,8 @@ export default function AdminDashboardPage() {
   const [drivers, setDrivers] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [vehicleFilter, setVehicleFilter] = useState('all')
+  const [viewingDriver, setViewingDriver] = useState(null)
   const [adminName, setAdminName] = useState('Admin')
   const [activeNav, setActiveNav] = useState('Analytics')
 
@@ -631,27 +902,53 @@ export default function AdminDashboardPage() {
   useEffect(() => { fetchDrivers() }, [])
 
   async function approveDriver(id) {
-    await supabase.from('driver_profiles').update({ status: 'approved', kyc_status: 'approved' }).eq('id', id)
+    const { error } = await supabase.from('driver_profiles').update({ status: 'approved', kyc_status: 'approved' }).eq('id', id)
+    if (error) { alert('Could not approve driver: ' + error.message); return }
     fetchDrivers()
   }
 
   async function rejectDriver(id) {
-    await supabase.from('driver_profiles').update({ status: 'rejected', kyc_status: 'rejected' }).eq('id', id)
+    const { error } = await supabase.from('driver_profiles').update({ status: 'rejected', kyc_status: 'rejected' }).eq('id', id)
+    if (error) { alert('Could not reject driver: ' + error.message); return }
     fetchDrivers()
   }
 
   async function suspendDriver(id) {
-    await supabase.from('driver_profiles').update({ status: 'suspended' }).eq('id', id)
+    // Also force offline immediately — set_driver_online_status (schema.sql)
+    // already blocks a suspended driver from going online again, but
+    // without this an already-online driver stays showing "online" in
+    // their own UI (harmlessly, since dispatch/discovery both filter on
+    // status='approved' too, but confusingly) until they happen to
+    // toggle it themselves.
+    const { error } = await supabase.from('driver_profiles').update({ status: 'suspended', is_online: false }).eq('id', id)
+    if (error) { alert('Could not suspend driver: ' + error.message); return }
     fetchDrivers()
   }
 
   async function reactivateDriver(id) {
-    await supabase.from('driver_profiles').update({ status: 'approved' }).eq('id', id)
+    const { error } = await supabase.from('driver_profiles').update({ status: 'approved' }).eq('id', id)
+    if (error) { alert('Could not reactivate driver: ' + error.message); return }
     fetchDrivers()
   }
 
   const [platformStats, setPlatformStats] = useState(null)
   const [campaignSummary, setCampaignSummary] = useState([])
+
+  // Real "needs attention" count for the header bell — previously a
+  // hardcoded red dot that always showed regardless of whether anything
+  // actually needed review. Same three things the Safety tab surfaces
+  // (open incidents, unresolved SOS, flagged payments), fetched here too
+  // so the badge is accurate no matter which tab is currently open.
+  const [attentionCount, setAttentionCount] = useState(0)
+  useEffect(() => {
+    Promise.all([
+      supabase.from('incident_reports').select('id', { count: 'exact', head: true }).eq('status', 'open'),
+      supabase.from('sos_events').select('id', { count: 'exact', head: true }).is('resolved_at', null),
+      supabase.from('payments').select('id', { count: 'exact', head: true }).eq('status', 'flagged'),
+    ]).then(([inc, sos, flagged]) => {
+      setAttentionCount((inc.count ?? 0) + (sos.count ?? 0) + (flagged.count ?? 0))
+    })
+  }, [])
 
   useEffect(() => {
     async function loadStats() {
@@ -659,10 +956,13 @@ export default function AdminDashboardPage() {
       const monthly = summarizeReports(data, 'Monthly')
       const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0)
       const ridesToday = data.rides.filter(r => new Date(r.created_at) >= startOfToday).length
+      const { count: riderCount } = await supabase
+        .from('users').select('id', { count: 'exact', head: true }).eq('role', 'rider')
       setPlatformStats({
         evAuto: monthly.evFleetMix.find(v => v.type === 'ev_auto')?.count ?? 0,
         evCar: monthly.evFleetMix.find(v => v.type === 'ev_car')?.count ?? 0,
         ridesToday,
+        riders: riderCount ?? 0,
         monthlyRevenue: monthly.revenue.buckets[monthly.revenue.buckets.length - 1]?.total ?? 0,
         revenueTrend: monthly.revenue.buckets,
       })
@@ -678,7 +978,9 @@ export default function AdminDashboardPage() {
   const filteredDrivers = pendingDrivers.filter(d => {
     const name = d.users?.name ?? ''
     const email = d.users?.email ?? ''
-    return name.toLowerCase().includes(search.toLowerCase()) || email.toLowerCase().includes(search.toLowerCase())
+    const matchesSearch = name.toLowerCase().includes(search.toLowerCase()) || email.toLowerCase().includes(search.toLowerCase())
+    const matchesVehicle = vehicleFilter === 'all' || d.vehicles?.[0]?.vehicle_type === vehicleFilter
+    return matchesSearch && matchesVehicle
   })
 
   const totalApproved = drivers.filter(d => d.status === 'approved').length
@@ -761,9 +1063,12 @@ export default function AdminDashboardPage() {
             <p style={{ fontSize: 15, color: '#4f6073', marginTop: 4 }}>Real-time performance metrics and operations.</p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <button style={{ width: 44, height: 44, borderRadius: '50%', border: 'none', background: 'white', boxShadow: '0 1px 4px rgba(26,43,60,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', position: 'relative' }}>
+            <button onClick={() => setActiveNav('Safety')} title={attentionCount > 0 ? `${attentionCount} item${attentionCount === 1 ? '' : 's'} need attention` : 'Nothing needs attention'}
+              style={{ width: 44, height: 44, borderRadius: '50%', border: 'none', background: 'white', boxShadow: '0 1px 4px rgba(26,43,60,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', position: 'relative' }}>
               <span className="material-symbols-outlined" style={{ fontSize: 22, color: '#0b1c30' }}>notifications</span>
-              <span style={{ position: 'absolute', top: 10, right: 10, width: 8, height: 8, background: '#ba1a1a', borderRadius: '50%' }} />
+              {attentionCount > 0 && (
+                <span style={{ position: 'absolute', top: 10, right: 10, width: 8, height: 8, background: '#ba1a1a', borderRadius: '50%' }} />
+              )}
             </button>
             <div style={{ width: 1, height: 36, background: '#bbcbbb', margin: '0 4px' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -773,7 +1078,9 @@ export default function AdminDashboardPage() {
           </div>
         </header>
 
-        {activeNav === 'Subscription' ? (
+        {activeNav === 'Pricing' ? (
+          <PricingAdminPanel />
+        ) : activeNav === 'Subscription' ? (
           <SubscriptionAdminPanel />
         ) : activeNav === 'Safety' ? (
           <SafetyAdminPanel />
@@ -784,11 +1091,12 @@ export default function AdminDashboardPage() {
         ) : (
         <>
         {/* KPI Cards */}
-        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 28 }}>
+        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 20, marginBottom: 28 }}>
           {[
-            { icon: 'person_pin_circle', label: 'Total Drivers',  value: drivers.length },
-            { icon: 'wifi_tethering',    label: 'Online Now',     value: activeDriverCount },
-            { icon: 'electric_car',      label: 'EV Fleet Mix',   value: platformStats ? `${platformStats.evAuto} Auto · ${platformStats.evCar} Car` : '…' },
+            { icon: 'person_pin_circle', label: 'Active Drivers',  value: totalApproved },
+            { icon: 'groups',            label: 'Riders',          value: platformStats ? platformStats.riders.toLocaleString('en-IN') : '…' },
+            { icon: 'wifi_tethering',    label: 'Online Now',      value: activeDriverCount },
+            { icon: 'electric_car',      label: 'EV Fleet Mix',    value: platformStats ? `${platformStats.evAuto} Auto · ${platformStats.evCar} Car` : '…' },
             { icon: 'account_balance_wallet', label: 'Revenue This Month', value: platformStats ? `₹${platformStats.monthlyRevenue.toLocaleString('en-IN')}` : '…' },
           ].map(card => (
             <div key={card.label} style={{
@@ -800,21 +1108,13 @@ export default function AdminDashboardPage() {
               onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 10px 30px rgba(26,43,60,0.12)' }}
               onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(26,43,60,0.05)' }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div style={{ padding: 10, background: card.iconBg, borderRadius: 12 }}>
-                  <span className="material-symbols-outlined" style={{ fontSize: 22, color: card.iconColor }}>{card.icon}</span>
-                </div>
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#006d37' }}>{card.badge}</span>
+              <div style={{ padding: 10, background: '#d2e4fb', borderRadius: 12, display: 'inline-flex', alignSelf: 'flex-start' }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 22, color: '#4f6073' }}>{card.icon}</span>
               </div>
               <div>
                 <p style={{ fontSize: 13, color: '#4f6073', marginBottom: 4 }}>{card.label}</p>
                 <h3 style={{ fontSize: 32, fontWeight: 600, color: '#0b1c30', letterSpacing: '-0.01em', margin: 0 }}>{card.value}</h3>
               </div>
-              {card.progress && (
-                <div style={{ height: 6, background: '#e5eeff', borderRadius: 9999 }}>
-                  <div style={{ width: `${card.progress}%`, height: '100%', background: '#006d37', borderRadius: 9999 }} />
-                </div>
-              )}
             </div>
           ))}
         </section>
@@ -907,10 +1207,15 @@ export default function AdminDashboardPage() {
                   style={{ paddingLeft: 38, paddingRight: 16, height: 38, border: 'none', borderRadius: 8, background: '#eff4ff', fontSize: 13, color: '#0b1c30', outline: 'none', width: 220 }}
                 />
               </div>
-              <button style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', height: 38, background: '#006d37', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>filter_list</span>
-                Filters
-              </button>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <span className="material-symbols-outlined" style={{ position: 'absolute', left: 12, fontSize: 16, color: 'white', pointerEvents: 'none' }}>filter_list</span>
+                <select value={vehicleFilter} onChange={e => setVehicleFilter(e.target.value)}
+                  style={{ appearance: 'none', paddingLeft: 34, paddingRight: 16, height: 38, background: '#006d37', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                  <option value="all" style={{ color: '#0b1c30' }}>All Vehicles</option>
+                  <option value="ev_auto" style={{ color: '#0b1c30' }}>EV Auto</option>
+                  <option value="ev_car" style={{ color: '#0b1c30' }}>EV Car</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -951,7 +1256,13 @@ export default function AdminDashboardPage() {
                         </div>
                       </td>
                       <td style={{ padding: '16px 24px' }}>
-                        <DocsBadge status={driver.kyc_status} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <DocsBadge status={driver.kyc_status} />
+                          <button onClick={() => setViewingDriver(driver)}
+                            style={{ fontSize: 12, fontWeight: 700, color: '#006d37', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+                            View
+                          </button>
+                        </div>
                       </td>
                       <td style={{ padding: '16px 24px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1040,6 +1351,10 @@ export default function AdminDashboardPage() {
         </>
         )}
       </main>
+
+      {viewingDriver && (
+        <DriverDocumentsPanel driver={viewingDriver} onClose={() => setViewingDriver(null)} />
+      )}
     </div>
   )
 }

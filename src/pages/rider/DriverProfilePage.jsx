@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth.jsx'
 import { fetchDriverProfile } from '@/lib/drivers'
-import { savePreferredDriver, fetchSubscriptionTier, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
+import { savePreferredDriver, fetchSubscriptionTier, fetchPreferredStatus, ELIGIBLE_TIERS } from '@/lib/preferredDrivers'
 
 const TIER_LABEL = { basic: null, pro: 'PRO DRIVER', elite: 'ELITE DRIVER' }
 
@@ -27,6 +27,11 @@ export default function DriverProfilePage() {
     if (!user) return
     fetchSubscriptionTier(user.id).then(setSubscriptionTier).catch(() => {})
   }, [user])
+
+  useEffect(() => {
+    if (!user || !profile) return
+    fetchPreferredStatus(user.id, profile.id).then(setSavedStatus).catch(() => {})
+  }, [user, profile])
 
   const isEligibleForPreferredDriver = ELIGIBLE_TIERS.includes(subscriptionTier)
 
@@ -200,7 +205,13 @@ export default function DriverProfilePage() {
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>favorite</span>
               {saving ? 'Saving…' : 'Save as Preferred'}
             </button>
-          ) : null}
+          ) : (
+            <button onClick={() => navigate('/rider/subscription')}
+              style={{ width: '100%', height: 44, background: 'none', border: '1px dashed var(--color-outline-variant)', borderRadius: 9999, color: 'var(--color-secondary)', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>favorite</span>
+              Upgrade to Care/Family to save as preferred
+            </button>
+          )}
           <button onClick={handleRequestRide}
             style={{ width: '100%', height: 52, background: 'var(--color-primary)', color: 'white', border: 'none', borderRadius: 9999, fontSize: 15, fontWeight: 700, cursor: 'pointer', boxShadow: '0 4px 16px rgba(0,109,55,0.25)' }}>
             Request Ride Now

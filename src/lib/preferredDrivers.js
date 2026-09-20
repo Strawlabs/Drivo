@@ -1,10 +1,13 @@
 import { supabase } from '@/lib/supabase'
+import { fetchEffectiveTier } from '@/lib/riderSubscriptions'
 
 export const ELIGIBLE_TIERS = ['care', 'family']
 
+// Derives the tier from rider_subscriptions (see src/lib/riderSubscriptions.js)
+// rather than users.subscription_tier — that column was never written to
+// from the rider side, so it could never reflect a real upgrade.
 export async function fetchSubscriptionTier(userId) {
-  const { data } = await supabase.from('users').select('subscription_tier').eq('id', userId).maybeSingle()
-  return data?.subscription_tier ?? 'none'
+  return fetchEffectiveTier(userId)
 }
 
 /*
@@ -27,6 +30,17 @@ export async function savePreferredDriver({ riderId, driverId }) {
   return data
 }
 
+export async function fetchPreferredStatus(riderId, driverId) {
+  const { data } = await supabase
+    .from('preferred_drivers')
+    .select('status')
+    .eq('rider_id', riderId)
+    .eq('driver_id', driverId)
+    .neq('status', 'removed')
+    .maybeSingle()
+  return data?.status ?? null
+}
+
 export async function removePreferredDriver(id) {
   const { error } = await supabase.from('preferred_drivers').update({ status: 'removed' }).eq('id', id)
   if (error) throw error
@@ -35,7 +49,7 @@ export async function removePreferredDriver(id) {
 export async function fetchPreferredDriversForRider(riderId) {
   const { data, error } = await supabase
     .from('preferred_drivers')
-    .select('id, status, saved_at, driver_id, driver_profiles(rating, is_online, upi_id, users(name), vehicles(make, model))')
+    .select('id, status, saved_at, driver_id, driver_profiles(rating, is_online, users(name), vehicles(make, model))')
     .eq('rider_id', riderId)
     .neq('status', 'removed')
     .order('saved_at', { ascending: false })

@@ -122,7 +122,7 @@ export default function SubscriptionPage() {
   const [failedWarning, setFailedWarning] = useState(false)
 
   const load = useCallback(async (dpId) => {
-    await checkAndUpdateSubscriptionStatus(dpId)
+    await checkAndUpdateSubscriptionStatus()
     const [p, c, h] = await Promise.all([
       fetchPlans(),
       fetchCurrentSubscription(dpId),
@@ -159,7 +159,7 @@ export default function SubscriptionPage() {
     setPanelError('')
     try {
       if (panel.mode === 'renew') {
-        await renewSubscription({ driverId: driverProfileId, currentSubscription: current, planId: panel.plan.id, upiReference: upiRef })
+        await renewSubscription({ driverId: driverProfileId, planId: panel.plan.id, upiReference: upiRef })
       } else {
         await activateSubscription({ driverId: driverProfileId, planId: panel.plan.id, upiReference: upiRef })
       }

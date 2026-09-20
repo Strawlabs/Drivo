@@ -35,9 +35,14 @@ export default function DriverAdsPage() {
 
   async function handleRespond(id, status) {
     setRespondingId(id)
-    await respondToAssignment(id, status)
-    await load(driverProfileId)
-    setRespondingId(null)
+    try {
+      await respondToAssignment(id, status)
+      await load(driverProfileId)
+    } catch (err) {
+      alert('Could not respond to this offer: ' + err.message)
+    } finally {
+      setRespondingId(null)
+    }
   }
 
   return (

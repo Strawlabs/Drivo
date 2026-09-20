@@ -238,17 +238,27 @@ export async function fetchUpcomingScheduledRides(userId) {
   })
 }
 
+/*
+  Routed through cancel_scheduled_ride (schema.sql) rather than a plain
+  update: nobody used to find out when a scheduled ride was cancelled
+  (the other family member if it was booked for them, or the assigned
+  driver if dispatch_due_scheduled_rides had already turned it into a
+  real ride) — and a raw update from this rider's own session can't
+  necessarily reach that real ride at all if it was booked for someone
+  else (rides_update_involved only allows the ride's own rider, driver,
+  or admin, not whoever originally scheduled it).
+*/
 export async function cancelScheduledRide(id, reason = 'Cancelled by user') {
-  const { error } = await supabase.from('scheduled_rides').update({ status: 'cancelled', cancellation_reason: reason }).eq('id', id)
+  const { error } = await supabase.rpc('cancel_scheduled_ride', { p_id: id, p_reason: reason })
   if (error) throw error
 }
 
 /*
-  No backend cron exists in this app — every scheduled/timed feature
-  here (Go Home Mode, UPI timeout) is dispatched client-side, anchored
-  to a real DB timestamp so it still works correctly after a reload.
-  This only fires while the rider has the app open at/after the
-  scheduled time; it does not fire in the background.
+  dispatch_due_scheduled_rides (schema.sql) already runs this
+  server-side on a cron tick, so a due ride gets dispatched even if the
+  rider's app is closed. This client-side pass just gives the rider
+  instant feedback if they happen to have the app open right at the
+  scheduled time, rather than waiting up to a minute for the next tick.
 */
 export async function dispatchDueScheduledRides(userId) {
   const nowIso = new Date().toISOString()

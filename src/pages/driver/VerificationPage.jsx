@@ -190,12 +190,12 @@ export default function DriverVerificationPage() {
         .eq('user_id', user.id)
         .single()
 
-      // 3. Update KYC status to submitted
+      // 3. Update KYC status to submitted — routed through
+      // submit_kyc_documents (schema.sql) since driver_profiles' UPDATE
+      // policy is admin-only now, so a plain client update no longer
+      // reaches this table at all.
       if (profile) {
-        await supabase
-          .from('driver_profiles')
-          .update({ kyc_status: 'submitted' })
-          .eq('id', profile.id)
+        await supabase.rpc('submit_kyc_documents', { p_driver_id: profile.id })
       }
 
       setSubmitted(true)
