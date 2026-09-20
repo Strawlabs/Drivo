@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/hooks/useAuth.jsx'
 import LoginPage from '@/pages/auth/LoginPage'
@@ -6,32 +6,41 @@ import RegisterPage from '@/pages/auth/RegisterPage'
 import LandingPage from '@/pages/LandingPage'
 import OnboardingPage from '@/pages/OnboardingPage'
 import SplashScreen from '@/pages/SplashScreen'
-import RiderHomePage from '@/pages/rider/HomePage'
-import BookRidePage from '@/pages/rider/BookRidePage'
-import DriverProfilePage from '@/pages/rider/DriverProfilePage'
-import HelpSupportPage from '@/pages/rider/HelpSupportPage'
-import ActiveRidePage from '@/pages/rider/ActiveRidePage'
-import RideCompletePage from '@/pages/rider/RideCompletePage'
-import ScheduledRidesPage from '@/pages/rider/ScheduledRidesPage'
-import FamilyPage from '@/pages/rider/FamilyPage'
-import PreferredDriversPage from '@/pages/rider/PreferredDriversPage'
-import RiderSubscriptionPage from '@/pages/rider/SubscriptionPage'
-import PersonalInformationPage from '@/pages/rider/PersonalInformationPage'
-import MobileNumberPage from '@/pages/rider/MobileNumberPage'
-import PaymentHistoryPage from '@/pages/rider/PaymentHistoryPage'
-import EcoImpactPage from '@/pages/rider/EcoImpactPage'
-import SafetyCenterPage from '@/pages/rider/SafetyCenterPage'
-import TermsPrivacyPage from '@/pages/rider/TermsPrivacyPage'
-import DriverHomePage from '@/pages/driver/HomePage'
-import DriverGoHomePage from '@/pages/driver/GoHomePage'
-import DriverVerificationPage from '@/pages/driver/VerificationPage'
-import DriverSubscriptionPage from '@/pages/driver/SubscriptionPage'
-import DriverAdsPage from '@/pages/driver/AdsPage'
-import DriverSettingsPage from '@/pages/driver/SettingsPage'
-import DriverAnalyticsPage from '@/pages/driver/AnalyticsPage'
-import AdminDashboardPage from '@/pages/admin/DashboardPage'
-import NotificationsPage from '@/pages/NotificationsPage'
-import SharedTripPage from '@/pages/SharedTripPage'
+
+/*
+  Everything past the pre-login funnel is code-split per page. The build
+  used to ship one ~1.4 MB (400 KB gzipped) bundle containing the admin
+  dashboard and every driver page to every rider (and vice versa) — a
+  rider now only downloads rider code, a driver only driver code. The
+  entry funnel above (landing/login/register/onboarding/splash) stays
+  eager so first paint isn't waiting on a second round trip.
+*/
+const RiderHomePage = lazy(() => import('@/pages/rider/HomePage'))
+const BookRidePage = lazy(() => import('@/pages/rider/BookRidePage'))
+const DriverProfilePage = lazy(() => import('@/pages/rider/DriverProfilePage'))
+const HelpSupportPage = lazy(() => import('@/pages/rider/HelpSupportPage'))
+const ActiveRidePage = lazy(() => import('@/pages/rider/ActiveRidePage'))
+const RideCompletePage = lazy(() => import('@/pages/rider/RideCompletePage'))
+const ScheduledRidesPage = lazy(() => import('@/pages/rider/ScheduledRidesPage'))
+const FamilyPage = lazy(() => import('@/pages/rider/FamilyPage'))
+const PreferredDriversPage = lazy(() => import('@/pages/rider/PreferredDriversPage'))
+const RiderSubscriptionPage = lazy(() => import('@/pages/rider/SubscriptionPage'))
+const PersonalInformationPage = lazy(() => import('@/pages/rider/PersonalInformationPage'))
+const MobileNumberPage = lazy(() => import('@/pages/rider/MobileNumberPage'))
+const PaymentHistoryPage = lazy(() => import('@/pages/rider/PaymentHistoryPage'))
+const EcoImpactPage = lazy(() => import('@/pages/rider/EcoImpactPage'))
+const SafetyCenterPage = lazy(() => import('@/pages/rider/SafetyCenterPage'))
+const TermsPrivacyPage = lazy(() => import('@/pages/rider/TermsPrivacyPage'))
+const DriverHomePage = lazy(() => import('@/pages/driver/HomePage'))
+const DriverGoHomePage = lazy(() => import('@/pages/driver/GoHomePage'))
+const DriverVerificationPage = lazy(() => import('@/pages/driver/VerificationPage'))
+const DriverSubscriptionPage = lazy(() => import('@/pages/driver/SubscriptionPage'))
+const DriverAdsPage = lazy(() => import('@/pages/driver/AdsPage'))
+const DriverSettingsPage = lazy(() => import('@/pages/driver/SettingsPage'))
+const DriverAnalyticsPage = lazy(() => import('@/pages/driver/AnalyticsPage'))
+const AdminDashboardPage = lazy(() => import('@/pages/admin/DashboardPage'))
+const NotificationsPage = lazy(() => import('@/pages/NotificationsPage'))
+const SharedTripPage = lazy(() => import('@/pages/SharedTripPage'))
 
 /* ── Shared loading spinner ───────────────────────────────── */
 function Spinner() {
@@ -109,6 +118,7 @@ function RoleRoute({ allowedRole, children }) {
 
 function AppRoutes() {
   return (
+    <Suspense fallback={<Spinner />}>
     <Routes>
       {/* Smart home — role-aware redirect */}
       <Route path="/" element={<SmartRedirect />} />
@@ -160,6 +170,7 @@ function AppRoutes() {
       {/* Catch-all → SmartRedirect handles it */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </Suspense>
   )
 }
 
